@@ -9,7 +9,7 @@
 <p>The Colorify program is designed to bring life to monochromatic images by applying state-of-the-art image colorization techniques. It employs a DCGAN, a type of GAN composed of two networks: a Generator and a Discriminator. The Generator network is built on a U-Net architecture, while the Discriminator network utilizes a series of filters with or without activation. This combination allows Colorify to learn and replicate intricate color patterns, producing visually appealing colorizations.</p>
 
 <h2>Training Data</h2>
-The training data for the Colorify model consists of a diverse set of +150k images collected from the Web. These images were randomly extracted using the FFspider program, available <a href="[https://github.com/your/repository/blob/main/LICENSE](https://github.com/Cydral/FFspider)">here</a>. This rich dataset serves as the foundation for teaching the AI model to understand color relationships and patterns, enabling it to generate accurate and vibrant colorizations.
+The training data for the Colorify model consists of a diverse set of +150k images collected from the Web. These images were randomly extracted using the FFspider program, available <a href="https://github.com/Cydral/FFspider">here</a>. This rich dataset serves as the foundation for teaching the AI model to understand color relationships and patterns, enabling it to generate accurate and vibrant colorizations.
 
 <h2>License</h2>
 <p>FFspider is released under the <a href="https://github.com/Cydral/Colorify/blob/main/LICENSE">MIT License</a>.</p>
