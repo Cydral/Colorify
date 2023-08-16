@@ -12,4 +12,4 @@
 The training data for the Colorify model consists of a diverse set of over 150k images collected from the Web. These images were randomly extracted using the FFspider program, available <a href="[https://github.com/your/repository/blob/main/LICENSE](https://github.com/Cydral/FFspider)">here</a>. This rich dataset serves as the foundation for teaching the AI model to understand color relationships and patterns, enabling it to generate accurate and vibrant colorizations.
 
 <h2>License</h2>
-<p>FFspider is released under the <a href="https://github.com/your/repository/blob/main/LICENSE">MIT License</a>.</p>
+<p>FFspider is released under the <a href="https://github.com/Cydral/Colorify/blob/main/LICENSE">MIT License</a>.</p>
