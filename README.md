@@ -7,3 +7,6 @@
 
 <h2>Overview</h2>
 <p>The Colorify program is designed to bring life to monochromatic images by applying state-of-the-art image colorization techniques. It employs a DCGAN, a type of GAN composed of two networks: a Generator and a Discriminator. The Generator network is built on a U-Net architecture, while the Discriminator network utilizes a series of filters with or without activation. This combination allows Colorify to learn and replicate intricate color patterns, producing visually appealing colorizations.</p>
+
+<h2>License</h2>
+<p>FFspider is released under the <a href="https://github.com/your/repository/blob/main/LICENSE">MIT License</a>.</p>
