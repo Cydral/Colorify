@@ -22,7 +22,7 @@ Contributions to Colorify are welcome! If you'd like to enhance the program or f
   <li>Push your changes to your forked repository.</li>
   <li>Create a pull request, detailing the changes you've made.</li>
 </ul>
-Enjoy with the Colorify project!
+Enjoy with the Colorify framework!
 
 <h2>License</h2>
 <p>FFspider is released under the <a href="https://github.com/Cydral/Colorify/blob/main/LICENSE">MIT License</a>. See the LICENSE file for more details.</p>
