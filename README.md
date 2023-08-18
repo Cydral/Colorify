@@ -14,6 +14,9 @@
 <p>To enhance the diversity and robustness of the training data, an augmentation method was employed. This method involves extracting random sub-zones of the images, ranging from 70% to 100% of the original size. This augmentation strategy enriches the dataset, enabling the AI model to grasp color relationships and patterns more comprehensively</p>
 <p>During the training process, Colorify adopts a unique approach to channel decomposition by utilizing the CIE L*a*b space. Similarly to traditional methods, the Generator network receives the luminance channel directly as input and learns to generate the a and b channels as output. The Discriminator network, on the other hand, is trained to differentiate between real images and generated images based solely on the a and b channels. This novel approach was informed by our own evaluations, which demonstrated that training the discriminator solely on the L channel had little impact on the learning process. Moreover, this approach simplifies the overall complexity of the training process without compromising convergence capability.</p>
 
+<h2>Disclaimer</h2>
+Please note that Colorify's colorization algorithm is primarily trained on a dataset consisting of images randomly selected from web sites. While it performs well for similar types of images, it may not yield optimal results for all image types due to the inherent "dataset bias" problem, as mentioned in the document <a href="https://arxiv.org/abs/1603.08511">Colorful Image Colorization</a> paper from Richard Zhang, Phillip Isola and Alexei A. Efros.
+
 <h2>Contributions</h2>
 Contributions to Colorify are welcome! If you'd like to enhance the program or fix any issues, please follow these steps:
 <ul>
