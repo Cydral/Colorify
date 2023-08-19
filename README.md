@@ -17,6 +17,7 @@
 <h2>Disclaimer</h2>
 <p>Please note that Colorify's colorization algorithm is primarily trained on a dataset consisting of images randomly selected from web sites. While it performs well for similar types of images, it may not yield optimal results for all image types due to the inherent "dataset bias" problem, as mentioned in the document <a href="https://arxiv.org/abs/1603.08511">Colorful Image Colorization</a> paper from Richard Zhang, Phillip Isola and Alexei A. Efros.</p>
 <p>The algorithm may also produce impressive colorizations; there might occasionally occur what we term as "chromatic aberration." This phenomenon can manifest as traces of blurriness in certain areas of the image along with color saturation. This is mainly attributed to localized "neural saturation" failing to recognize specific patterns. We include these aspects as part of our experimental observations and findings in the colorization process.</p>
+<p>Furthermore, despite the substantial size of the training dataset used for the provided DNN model, a "gray-toned effect" (or brownish) might also manifest. This effect reflects a statistical uncertainty regarding the color that the neural network should generate for the specific area (or even the entire image) being processed.</p>
 
 <h2>Contributions</h2>
 Contributions to Colorify are welcome! If you'd like to enhance the program or fix any issues, please follow these steps:
