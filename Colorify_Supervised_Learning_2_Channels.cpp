@@ -30,7 +30,7 @@ struct current_state {
 
 // ----------------------------------------------------------------------------------------
 template <typename AbImageType>
-matrix<rgb_pixel> concact_channels(const matrix<gray_pixel>& gray_image, const AbImageType& ab_image) {
+matrix<rgb_pixel> concat_channels(const matrix<gray_pixel>& gray_image, const AbImageType& ab_image) {
     matrix<lab_pixel> lab_image(gray_image.nr(), gray_image.nc());
     for (long r = 0; r < lab_image.nr(); ++r) {
         for (long c = 0; c < lab_image.nc(); ++c) {
@@ -79,29 +79,29 @@ void resize_max(matrix<pixel_type>& in, size_t max_image_dims) {
 }
 
 // ----------------------------------------------------------------------------------------
-matrix<rgb_pixel> lr_generate_image(lr_generator_type& net, const matrix<gray_pixel>& src) {
-    matrix<gray_pixel> gray_image = src;
-    resize_inplace(gray_image, std_image_size);
-    matrix<uint16_t> output = net(gray_image);
-    matrix<rgb_pixel> rgb_image = concact_channels(gray_image, output);
-    scale_image(src.nr(), src.nc(), rgb_image);
+template <typename GeneratorType>
+matrix<rgb_pixel> generate_image(GeneratorType& net, const matrix<gray_pixel>& src) {
+    static_assert(std::is_same_v<GeneratorType, lr_generator_type> || std::is_same_v<GeneratorType, hr_generator_type>,
+        "net must be either lr_generator_type or hr_generator_type");
 
-    matrix<lab_pixel> lab_image;
-    assign_image(lab_image, rgb_image);
-    for (long r = 0; r < lab_image.nr(); ++r) for (long c = 0; c < lab_image.nc(); ++c) lab_image(r, c).l = src(r, c);
-    assign_image(rgb_image, lab_image);
-    return rgb_image;
-}
-matrix<rgb_pixel> hr_generate_image(hr_generator_type& net, const matrix<gray_pixel>& src) {
     matrix<gray_pixel> gray_image = src;
     resize_inplace(gray_image, std_image_size);
-    std::array<matrix<float>, 2> output = net(gray_image);
-    matrix<rgb_pixel> rgb_image = concact_channels(gray_image, output);
-    scale_image(src.nr(), src.nc(), rgb_image);
-    
+    matrix<rgb_pixel> rgb_image, blur_image;
+    if constexpr (std::is_same_v<GeneratorType, lr_generator_type>) {
+        matrix<uint16_t> output = net(gray_image);
+        rgb_image = concat_channels(gray_image, output);
+        scale_image(src.nr(), src.nc(), rgb_image);
+    } else if constexpr (std::is_same_v<GeneratorType, hr_generator_type>) {
+        std::array<matrix<float>, 2> output = net(gray_image);
+        rgb_image = concat_channels(gray_image, output);
+    }
+    gaussian_blur(rgb_image, blur_image, 0.7);
+    scale_image(src.nr(), src.nc(), blur_image);
     matrix<lab_pixel> lab_image;
-    assign_image(lab_image, rgb_image);
-    for (long r = 0; r < lab_image.nr(); ++r) for (long c = 0; c < lab_image.nc(); ++c) lab_image(r, c).l = src(r, c);
+    assign_image(lab_image, blur_image);
+    for (long r = 0; r < lab_image.nr(); ++r)
+        for (long c = 0; c < lab_image.nc(); ++c)
+            lab_image(r, c).l = src(r, c);
     assign_image(rgb_image, lab_image);
     return rgb_image;
 }
@@ -335,8 +335,8 @@ int main(int argc, char** argv) try {
                 auto gen_samples = generator(samples);
                 size_t pos_i = 0, max_iter = __min(gen_samples.size(), 4);
                 for (auto& image : gen_samples) {
-                    src_img = concact_channels(samples[pos_i], labels[pos_i]);
-                    rgb_gen = concact_channels(samples[pos_i], image);
+                    src_img = concat_channels(samples[pos_i], labels[pos_i]);
+                    rgb_gen = concat_channels(samples[pos_i], image);
                     disp_imgs.push_back(join_rows(src_img, rgb_gen));
                     if (++pos_i >= max_iter) break;
                 }
@@ -455,8 +455,8 @@ int main(int argc, char** argv) try {
                 auto gen_samples = generator(samples);
                 size_t pos_i = 0, max_iter = __min(gen_samples.size(), 4);
                 for (auto& image : gen_samples) {
-                    src_img = concact_channels(samples[pos_i], labels[pos_i]);
-                    rgb_gen = concact_channels(samples[pos_i], image);
+                    src_img = concat_channels(samples[pos_i], labels[pos_i]);
+                    rgb_gen = concat_channels(samples[pos_i], image);
                     disp_imgs.push_back(join_rows(src_img, rgb_gen));
                     if (++pos_i >= max_iter) break;
                 }
@@ -531,7 +531,7 @@ int main(int argc, char** argv) try {
             rgb_image_to_grayscale_image(input_image, gray_image);
             assign_image(display_gray_image, gray_image);         
 
-            gen_image = use_lr_model ? lr_generate_image(lr_generator, gray_image) : hr_generate_image(hr_generator, gray_image);
+            gen_image = use_lr_model ? generate_image(lr_generator, gray_image) : generate_image(hr_generator, gray_image);
             win.set_title("COLORIFY - Grayscale " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Original | Generated (" + to_string(gen_image.nc()) + "x" + to_string(gen_image.nr()) + ")");
             win.set_image(join_rows(display_gray_image, join_rows(input_image, gen_image)));
             std::cout << i.full_name() << " - Hit enter to process the next image or 'q' to quit";
