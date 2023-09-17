@@ -7,6 +7,10 @@
 #include <thread>
 #include <filesystem>
 
+#include <boost/program_options.hpp>
+#include <exception>
+
+namespace po = boost::program_options;
 namespace fs = std::filesystem;
 using weighted_label_ = loss_multiclass_log_per_pixel_weighted_::weighted_label;
 
@@ -202,7 +206,7 @@ BOOL WINAPI CtrlHandler(DWORD ctrlType) {
 void normalize_images(const std::string& rootDir) {
     const std::vector<file> training_images = dlib::get_files_in_directory_tree(rootDir, dlib::match_endings(".jpeg .jpg .png"));
     long total_files = training_images.size();
-    atomic<long> processed_files = 0;
+    long processed_files = 0;
 
     for (const auto& file : training_images) {
         try {
@@ -233,20 +237,32 @@ void normalize_images(const std::string& rootDir) {
 }
 
 int main(int argc, char** argv) try {
-    if (argc < 3) {
-        std::cout << "Usage: Colorify --[norm|train-lr|train-hr|test-lr|test-hr] <directory>" << std::endl;
+    po::options_description desc("Program options");
+    desc.add_options()
+        ("help", "this help message")
+        ("normalization", po::value<string>(), "normalize images <dir>")
+        ("classification", po::value<string>(), "train classification model <dir>")
+        ("regression", po::value<string>(), "train regression model <dir>")
+        ("class-test", po::value<string>(), "test classification model <dir>")
+        ("reg-test", po::value<string>(), "test regression model <dir>");
+
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    po::notify(vm);
+
+    if (vm.count("help")) {
+        cout << desc << std::endl;
         return EXIT_FAILURE;
     }
-    std::string option = argv[1];
     std::srand(std::time(nullptr));
     dlib::rand rnd(std::rand());
     size_t iteration = 0;    
     SetConsoleCtrlHandler(CtrlHandler, TRUE);
 
-    if (option == "--norm") {
-        normalize_images(argv[2]);
-    } else if (option == "--train-lr") {
-        const std::vector<file> training_images = dlib::get_files_in_directory_tree(argv[2], dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
+    if (vm.count("normalization")) {
+        normalize_images(vm["normalization"].as<string>());
+    } else if (vm.count("classification")) {
+        const std::vector<file> training_images = dlib::get_files_in_directory_tree(vm["classification"].as<string>(), dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
         if (training_images.size() == 0) {
             std::cout << "Didn't find images for the training dataset." << endl;
             return EXIT_FAILURE;
@@ -256,7 +272,7 @@ int main(int argc, char** argv) try {
         state.last_run_time = state.first_run_time;
 
         // Instantiate both generator        
-        const size_t minibatch_size = 24;        
+        const size_t minibatch_size = 22;
         dlib::rand rnd(time(nullptr));
         set_dnn_prefer_fastest_algorithms();
         lr_generator_type generator;
@@ -264,13 +280,13 @@ int main(int argc, char** argv) try {
         // Resume training from last sync file
         if (file_exists("lowres_colorify.dnn")) deserialize("lowres_colorify.dnn") >> generator;
 
-        const double learning_rate = 1e-1;
+        const double learning_rate = (training_images.size() < 5000) ? 1e-1 : 1e-2;
         const double min_learning_rate = 1e-6;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
-        const long patience = 20000;
-        const long update_display = 30;
-        const long max_minutes_elapsed = 5;
+        const long patience = (training_images.size() < 5000) ? 5000 : 15000;
+        const long update_display = 50;
+        const long max_minutes_elapsed = 8;
 
         // Initialize the trainer
         dnn_trainer<lr_generator_type> trainer(generator, sgd(weight_decay, momentum));
@@ -283,6 +299,13 @@ int main(int argc, char** argv) try {
         set_all_bn_running_stats_window_sizes(generator, 1000);
 
         // Output training parameters
+        training_sample_lr sample;
+        const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
+        matrix<rgb_pixel> input_image;
+        load_image(input_image, image_info.full_name());
+        randomly_crop_image(input_image, sample, rnd);
+        generator(sample.input_image);
+        
         std::cout << "The network has " << generator.num_layers << " layers in it." << std::endl;
         std::cout << generator << std::endl;
         std::cout << std::endl << trainer << std::endl;
@@ -315,7 +338,6 @@ int main(int argc, char** argv) try {
         std::vector<matrix<uint16_t>> labels;
         std::vector<matrix<weighted_label_>> weighted_labels;
         std::vector<matrix<gray_pixel>> samples;
-        training_sample_lr sample;
         dlib::image_window win;
         while (!g_interrupted) {
             // Train
@@ -368,8 +390,8 @@ int main(int argc, char** argv) try {
         trainer.get_net();
         generator.clean();
         serialize("lowres_colorify.dnn") << generator;
-    } else if (option == "--train-hr") {
-        const std::vector<file> training_images = dlib::get_files_in_directory_tree(argv[2], dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
+    } else if (vm.count("regression")) {
+        const std::vector<file> training_images = dlib::get_files_in_directory_tree(vm["regression"].as<string>(), dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
         if (training_images.size() == 0) {
             std::cout << "Didn't find images for the training dataset." << endl;
             return EXIT_FAILURE;
@@ -379,7 +401,7 @@ int main(int argc, char** argv) try {
         state.last_run_time = state.first_run_time;
 
         // Instantiate both generator        
-        const size_t minibatch_size = 32;        
+        const size_t minibatch_size = 22;        
         dlib::rand rnd(time(nullptr));
         set_dnn_prefer_fastest_algorithms();
         hr_generator_type generator;
@@ -387,13 +409,13 @@ int main(int argc, char** argv) try {
         // Resume training from last sync file
         if (file_exists("highres_colorify.dnn")) deserialize("highres_colorify.dnn") >> generator;
 
-        const double learning_rate = 1e-1;
+        const double learning_rate = (training_images.size() < 5000) ? 1e-1 : 1e-2;
         const double min_learning_rate = 1e-6;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
-        const long patience = 20000;
-        const long update_display = 30;
-        const long max_minutes_elapsed = 5;
+        const long patience = (training_images.size() < 5000) ? 5000 : 15000;
+        const long update_display = 50;
+        const long max_minutes_elapsed = 8;
 
         // Initialize the trainer
         dnn_trainer<hr_generator_type> trainer(generator, sgd(weight_decay, momentum));
@@ -406,6 +428,13 @@ int main(int argc, char** argv) try {
         set_all_bn_running_stats_window_sizes(generator, 1000);
 
         // Output training parameters
+        training_sample_hr sample;
+        const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
+        matrix<rgb_pixel> input_image;
+        load_image(input_image, image_info.full_name());
+        randomly_crop_image(input_image, sample, rnd);
+        generator(sample.input_image);
+
         std::cout << "The network has " << generator.num_layers << " layers in it." << std::endl;
         std::cout << generator << std::endl;
         std::cout << std::endl << trainer << std::endl;
@@ -437,7 +466,6 @@ int main(int argc, char** argv) try {
 
         std::vector<std::array<matrix<float>, 2>> labels;
         std::vector<matrix<gray_pixel>> samples;
-        training_sample_hr sample;
         dlib::image_window win;
         while (!g_interrupted) {
             // Train
@@ -488,8 +516,10 @@ int main(int argc, char** argv) try {
         trainer.get_net();
         generator.clean();
         serialize("highres_colorify.dnn") << generator;
-    } else if (option == "--test-lr" || option == "--test-hr") {
-        const std::vector<file> images = dlib::get_files_in_directory_tree(argv[2], dlib::match_endings(".jpeg .jpg .png"));
+    } else if (vm.count("class-test") || vm.count("reg-test")) {
+        bool use_lr_model = vm.count("class-test");
+        const string input_dir = use_lr_model ? vm["class-test"].as<string>() : vm["reg-test"].as<string>();
+        const std::vector<file> images = dlib::get_files_in_directory_tree(input_dir, dlib::match_endings(".jpeg .jpg .png"));
         std::cout << "total images to colorify: " << images.size() << endl;
         if (images.size() == 0) {
             std::cout << "Didn't find images to colorify." << endl;
@@ -497,8 +527,7 @@ int main(int argc, char** argv) try {
         }
 
         // Load the mode
-        dlib::rand rnd(time(nullptr));
-        bool use_lr_model = (option == "--test-lr");
+        dlib::rand rnd(time(nullptr));        
         lr_generator_type lr_generator;
         hr_generator_type hr_generator;
         if (use_lr_model) {
