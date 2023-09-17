@@ -100,6 +100,7 @@ template <typename SUBNET> using generator_backbone =
     level2<utag2<
     level1<max_pool<3, 3, 2, 2, utag1<
     relu<bn_con<con<64, 7, 7, 2, 2, SUBNET>>>>>>>>>>>>>>>>>>>>>>>;
+
 using lr_generator_type = loss_multiclass_log_per_pixel_weighted<
     cont<256, 1, 1, 1, 1,
     generator_backbone<
@@ -155,18 +156,6 @@ inline float dequantize_n_bits(uint16_t quantized_value, int n) {
     float max_value = (1 << n) - 1; // Calculate the maximum value for n bits    
     return (static_cast<float>(quantized_value) * 255.0f / max_value); // Dequantize the value
 }
-matrix<uint16_t> quantize_ab_channels(const matrix<rgb_pixel>& rgb_image) {
-    matrix<lab_pixel> lab_image;
-    assign_image(lab_image, rgb_image);
-    matrix<uint16_t> quantized_ab_image(lab_image.nr(), lab_image.nc());
-    for (long r = 0; r < lab_image.nr(); ++r) {
-        for (long c = 0; c < lab_image.nc(); ++c) {
-            // Pack quantized a and b channels into a single 16-bit value
-            quantized_ab_image(r, c) = (quantize_n_bits(lab_image(r, c).a, 4) << 4) | quantize_n_bits(lab_image(r, c).b, 4);
-        }
-    }
-    return quantized_ab_image;
-}
 
 // Function to calculate the normalized weight for a pixel in Lab color space
 float calc_weight(uint16_t quantized_a, uint16_t quantized_b, int n, float original_a, float original_b, float luminance) {
@@ -178,7 +167,7 @@ float calc_weight(uint16_t quantized_a, uint16_t quantized_b, int n, float origi
 
     // Calculate the normalized weight as the ratio of the distance to the maximum distance, weighted by luminance
     if (luminance < 0.4f) luminance = 0.4f;
-    float normalized_weight = (1.0f - (distance / max_distance)) * luminance;
+    float normalized_weight = (1.0f - (distance / max_distance)) * luminance + ((original_a / 255.0f) + (original_b / 255.0f)) / 2.0f;
     if (normalized_weight < 0.0f) normalized_weight = 0.0f;
     else if (normalized_weight > 1.0f) normalized_weight = 1.0f;
     return normalized_weight;
