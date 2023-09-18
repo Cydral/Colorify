@@ -280,11 +280,11 @@ int main(int argc, char** argv) try {
             }
         }        
 
-        const double learning_rate = (training_images.size() < 5000) ? 1e-1 : 1e-2;
+        const double learning_rate = (training_images.size() < 3000) ? 1e-1 : 1e-2;
         const double min_learning_rate = 1e-6;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
-        const long patience = (training_images.size() < 5000) ? 5000 : 15000;
+        const long patience = (training_images.size() < 3000) ? 5000 : 10000;
         const long update_display = 50;
         const long max_minutes_elapsed = 5;
 
@@ -467,7 +467,8 @@ int main(int argc, char** argv) try {
 
         dlib::image_window win;
         matrix<rgb_pixel> input_image, rgb_image, blur_image, display_gray_image;
-        matrix<gray_pixel> gray_image, temp_gray_image;        
+        matrix<gray_pixel> gray_image, temp_gray_image;
+        matrix<lab_pixel> lab_image;
         for (auto& i : images) {            
             try { load_image(input_image, i.full_name()); }
             catch (...) {
@@ -488,10 +489,9 @@ int main(int argc, char** argv) try {
                 } else {
                     std::array<matrix<float>, 2> output = net_hr(temp_gray_image);
                     rgb_image = concat_channels(temp_gray_image, output);
-                }
-                gaussian_blur(rgb_image, blur_image, 0.7);
-                scale_image(gray_image.nr(), gray_image.nc(), blur_image);
-                matrix<lab_pixel> lab_image;
+                }                
+                scale_image(gray_image.nr(), gray_image.nc(), rgb_image);
+                gaussian_blur(rgb_image, blur_image, 0.7);                
                 assign_image(lab_image, blur_image);
                 for (long r = 0; r < lab_image.nr(); ++r)
                     for (long c = 0; c < lab_image.nc(); ++c)
