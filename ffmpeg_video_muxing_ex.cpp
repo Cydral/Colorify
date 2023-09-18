@@ -154,6 +154,7 @@ try {
     frame f;
     matrix<gray_pixel> gray_image, temp_gray_image;
     matrix<rgb_pixel> input_image, rgb_image, blur_image;
+    matrix<lab_pixel> lab_image;
     uint64_t processed_samples = 0;
 
     dlib::image_window win;
@@ -174,10 +175,9 @@ try {
                 } else {
                     matrix<uint16_t> output = net_lr(temp_gray_image);
                     rgb_image = concat_channels(temp_gray_image, output);
-                }
+                }                
+                scale_image(gray_image.nr(), gray_image.nc(), rgb_image);
                 gaussian_blur(rgb_image, blur_image, 0.7);
-                scale_image(gray_image.nr(), gray_image.nc(), blur_image);
-                matrix<lab_pixel> lab_image;
                 assign_image(lab_image, blur_image);
                 for (long r = 0; r < lab_image.nr(); ++r)
                     for (long c = 0; c < lab_image.nc(); ++c)
