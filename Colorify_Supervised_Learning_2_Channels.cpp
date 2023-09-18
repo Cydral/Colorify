@@ -84,7 +84,7 @@ void resize_max(matrix<pixel_type>& in, size_t max_image_dims) {
 // ----------------------------------------------------------------------------------------
 rectangle make_random_cropping_rect(const matrix<rgb_pixel>& img, dlib::rand& rnd) {
     // figure out what rectangle we want to crop from the image
-    double mins = 0.9, maxs = 1.0;
+    double mins = 0.85, maxs = 1.0;
     auto scale = mins + rnd.get_random_double() * (maxs - mins);
     auto size = scale * std::min(img.nr(), img.nc());
     rectangle rect(size, size);
@@ -143,9 +143,10 @@ bool is_grayscale(const matrix<rgb_pixel>& image) {
         }
     }
     // If both standard deviations are below a threshold, consider it grayscale
-    const double threshold = 3.15;
+    const double threshold = 3.27;
     return a_stats.stddev() < threshold && b_stats.stddev() < threshold;
 }
+
 bool is_two_small(const matrix<rgb_pixel>& image) {
     const size_t min_image_size = 200;
     return (image.nc() < min_image_size || image.nr() < min_image_size);
@@ -170,7 +171,7 @@ void normalize_images(const std::string& rootDir) {
     for (const auto& file : training_images) {
         try {
             matrix<rgb_pixel> input_image;
-            load_image(input_image, file.full_name());
+            load_image(input_image, file.full_name());            
             if (is_grayscale(input_image) || is_two_small(input_image)) {
                 std::cout << "Too small or grayscale image, deleting: " << file.full_name() << endl;
                 fs::remove(file.full_name()); // Remove small images
