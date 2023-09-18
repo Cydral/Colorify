@@ -6,9 +6,7 @@
 #include <iterator>
 #include <thread>
 #include <filesystem>
-
 #include <boost/program_options.hpp>
-#include <exception>
 
 namespace po = boost::program_options;
 namespace fs = std::filesystem;
@@ -16,14 +14,11 @@ using weighted_label_ = loss_multiclass_log_per_pixel_weighted_::weighted_label;
 
 // ----------------------------------------------------------------------------------------
 const bool do_color_reduction = false;
-struct training_sample_lr {
+struct training_sample {
     matrix<gray_pixel> input_image;
-    matrix<uint16_t> output_image;
+    matrix<uint16_t> lr_output_image;
     matrix<weighted_label_> weighted_output_image;
-};
-struct training_sample_hr {
-    matrix<gray_pixel> input_image;
-    std::array<matrix<float>, 2> output_image;
+    std::array<matrix<float>, 2> hr_output_image;
 };
 
 // ----------------------------------------------------------------------------------------
@@ -83,34 +78,6 @@ void resize_max(matrix<pixel_type>& in, size_t max_image_dims) {
 }
 
 // ----------------------------------------------------------------------------------------
-template <typename GeneratorType>
-matrix<rgb_pixel> generate_image(GeneratorType& net, const matrix<gray_pixel>& src) {
-    static_assert(std::is_same_v<GeneratorType, lr_generator_type> || std::is_same_v<GeneratorType, hr_generator_type>,
-        "net must be either lr_generator_type or hr_generator_type");
-
-    matrix<gray_pixel> gray_image = src;
-    resize_inplace(gray_image, std_image_size);
-    matrix<rgb_pixel> rgb_image, blur_image;
-    if constexpr (std::is_same_v<GeneratorType, lr_generator_type>) {
-        matrix<uint16_t> output = net(gray_image);
-        rgb_image = concat_channels(gray_image, output);
-        scale_image(src.nr(), src.nc(), rgb_image);
-    } else if constexpr (std::is_same_v<GeneratorType, hr_generator_type>) {
-        std::array<matrix<float>, 2> output = net(gray_image);
-        rgb_image = concat_channels(gray_image, output);
-    }
-    gaussian_blur(rgb_image, blur_image, 0.7);
-    scale_image(src.nr(), src.nc(), blur_image);
-    matrix<lab_pixel> lab_image;
-    assign_image(lab_image, blur_image);
-    for (long r = 0; r < lab_image.nr(); ++r)
-        for (long c = 0; c < lab_image.nc(); ++c)
-            lab_image(r, c).l = src(r, c);
-    assign_image(rgb_image, lab_image);
-    return rgb_image;
-}
-
-// ----------------------------------------------------------------------------------------
 rectangle make_random_cropping_rect(const matrix<rgb_pixel>& img, dlib::rand& rnd) {
     // figure out what rectangle we want to crop from the image
     double mins = 0.9, maxs = 1.0;
@@ -123,34 +90,7 @@ rectangle make_random_cropping_rect(const matrix<rgb_pixel>& img, dlib::rand& rn
 }
 
 // ----------------------------------------------------------------------------------------
-void randomly_crop_image(
-    const matrix<rgb_pixel>& input_image, training_sample_lr& crop, dlib::rand& rnd) {
-    const auto rect = make_random_cropping_rect(input_image, rnd);
-    const chip_details chip_details(rect, chip_dims(std_image_size, std_image_size));
-
-    matrix<rgb_pixel> src_image;
-    extract_image_chip(input_image, chip_details, src_image, interpolate_bilinear());
-    if (do_color_reduction) reduce_colors(src_image);
-    if (rnd.get_random_double() > 0.5) src_image = fliplr(src_image);
-
-    rgb_image_to_grayscale_image(src_image, crop.input_image);    
-    matrix<lab_pixel> lab_image;
-    assign_image(lab_image, src_image);
-    crop.weighted_output_image.set_size(lab_image.nr(), lab_image.nc());
-    crop.output_image.set_size(lab_image.nr(), lab_image.nc());
-    for (long r = 0; r < lab_image.nr(); ++r) {
-        for (long c = 0; c < lab_image.nc(); ++c) {
-            uint16_t quantized_a = quantize_n_bits(lab_image(r, c).a, 4);
-            uint16_t quantized_b = quantize_n_bits(lab_image(r, c).b, 4);
-            uint16_t label = (quantized_a << 4) | quantized_b;
-            float weight = calc_weight(quantized_a, quantized_b, 4, lab_image(r, c).a, lab_image(r, c).b, lab_image(r, c).l / 255.0f);
-            crop.output_image(r, c) = label;
-            crop.weighted_output_image(r, c) = weighted_label(label, weight);
-        }
-    }
-}
-void randomly_crop_image(
-    const matrix<rgb_pixel>& input_image, training_sample_hr& crop, dlib::rand& rnd) {
+void randomly_crop_image(const matrix<rgb_pixel>& input_image, training_sample& crop, dlib::rand& rnd, const bool low_res) {
     const auto rect = make_random_cropping_rect(input_image, rnd);
     const chip_details chip_details(rect, chip_dims(std_image_size, std_image_size));
 
@@ -161,13 +101,28 @@ void randomly_crop_image(
 
     rgb_image_to_grayscale_image(src_image, crop.input_image);
     matrix<lab_pixel> lab_image;
-    dlib::assign_image(lab_image, src_image);
-    crop.output_image[0].set_size(lab_image.nr(), lab_image.nc());
-    crop.output_image[1].set_size(lab_image.nr(), lab_image.nc());
-    for (long r = 0; r < lab_image.nr(); ++r) {
-        for (long c = 0; c < lab_image.nc(); ++c) {
-            crop.output_image[0](r, c) = quantize_n_bits(lab_image(r, c).a, 4);
-            crop.output_image[1](r, c) = quantize_n_bits(lab_image(r, c).b, 4);
+    assign_image(lab_image, src_image);
+    if (low_res) {        
+        crop.weighted_output_image.set_size(lab_image.nr(), lab_image.nc());
+        crop.lr_output_image.set_size(lab_image.nr(), lab_image.nc());
+        for (long r = 0; r < lab_image.nr(); ++r) {
+            for (long c = 0; c < lab_image.nc(); ++c) {
+                uint16_t quantized_a = quantize_n_bits(lab_image(r, c).a, 4);
+                uint16_t quantized_b = quantize_n_bits(lab_image(r, c).b, 4);
+                uint16_t label = (quantized_a << 4) | quantized_b;
+                float weight = calc_weight(quantized_a, quantized_b, 4, lab_image(r, c).a, lab_image(r, c).b, lab_image(r, c).l / 255.0f);
+                crop.lr_output_image(r, c) = label;
+                crop.weighted_output_image(r, c) = weighted_label(label, weight);
+            }
+        }
+    } else {
+        crop.hr_output_image[0].set_size(lab_image.nr(), lab_image.nc());
+        crop.hr_output_image[1].set_size(lab_image.nr(), lab_image.nc());
+        for (long r = 0; r < lab_image.nr(); ++r) {
+            for (long c = 0; c < lab_image.nc(); ++c) {
+                crop.hr_output_image[0](r, c) = quantize_n_bits(lab_image(r, c).a, 4);
+                crop.hr_output_image[1](r, c) = quantize_n_bits(lab_image(r, c).b, 4);
+            }
         }
     }
 }
@@ -237,14 +192,14 @@ void normalize_images(const std::string& rootDir) {
 }
 
 int main(int argc, char** argv) try {
-    po::options_description desc("Program options");
+    po::options_description desc("Program options");    
     desc.add_options()
-        ("help", "this help message")
         ("normalization", po::value<string>(), "normalize images <dir>")
         ("classification", po::value<string>(), "train classification model <dir>")
         ("regression", po::value<string>(), "train regression model <dir>")
-        ("class-test", po::value<string>(), "test classification model <dir>")
-        ("reg-test", po::value<string>(), "test regression model <dir>");
+        ("classification-test", po::value<string>(), "test classification model <dir>")
+        ("regression-test", po::value<string>(), "test regression model <dir>")
+        ("help", "this help message");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -261,24 +216,32 @@ int main(int argc, char** argv) try {
 
     if (vm.count("normalization")) {
         normalize_images(vm["normalization"].as<string>());
-    } else if (vm.count("classification")) {
-        const std::vector<file> training_images = dlib::get_files_in_directory_tree(vm["classification"].as<string>(), dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
+    } else if (vm.count("classification") || vm.count("regression")) {
+        const bool classification_training = vm.count("classification");
+        const string input_dir = classification_training ? vm["classification"].as<string>() : vm["regression"].as<string>();
+        const std::vector<file> training_images = dlib::get_files_in_directory_tree(input_dir, dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
         if (training_images.size() == 0) {
-            std::cout << "Didn't find images for the training dataset." << endl;
+            std::cout << "Didn't find images for the training dataset" << endl;
             return EXIT_FAILURE;
         }
         current_state state;
         state.first_run_time = chrono::system_clock::now();
         state.last_run_time = state.first_run_time;
 
-        // Instantiate both generator        
+        // Instantiate the model        
         const size_t minibatch_size = 22;
         dlib::rand rnd(time(nullptr));
         set_dnn_prefer_fastest_algorithms();
-        lr_generator_type generator;
-
-        // Resume training from last sync file
-        if (file_exists("lowres_colorify.dnn")) deserialize("lowres_colorify.dnn") >> generator;
+        const string model_name = classification_training ? "lowres_colorify.dnn" : "highres_colorify.dnn";
+        using net_type_lr = loss_multiclass_log_per_pixel_weighted<cont<256, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
+        using net_type_hr = loss_mean_squared_per_channel_and_pixel<2, cont<2, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
+        net_type_lr net_lr;
+        net_type_hr net_hr;
+        if (classification_training) {
+            if (file_exists(model_name)) deserialize(model_name) >> net_lr;
+        } else {
+            if (file_exists(model_name)) deserialize(model_name) >> net_hr;
+        }
 
         const double learning_rate = (training_images.size() < 5000) ? 1e-1 : 1e-2;
         const double min_learning_rate = 1e-6;
@@ -286,43 +249,58 @@ int main(int argc, char** argv) try {
         const double momentum = 0.9;
         const long patience = (training_images.size() < 5000) ? 5000 : 15000;
         const long update_display = 50;
-        const long max_minutes_elapsed = 8;
+        const long max_minutes_elapsed = 5;
 
         // Initialize the trainer
-        dnn_trainer<lr_generator_type> trainer(generator, sgd(weight_decay, momentum));
-        trainer.set_learning_rate(learning_rate);
-        trainer.set_learning_rate_shrink_factor(0.1);
-        trainer.set_mini_batch_size(minibatch_size);
-        trainer.set_iterations_without_progress_threshold(patience);
-        trainer.set_min_learning_rate(min_learning_rate);
-        trainer.be_verbose();
-        set_all_bn_running_stats_window_sizes(generator, 1000);
+        dnn_trainer<net_type_lr> trainer_lr(net_lr, sgd(weight_decay, momentum));
+        trainer_lr.set_learning_rate(learning_rate);
+        trainer_lr.set_learning_rate_shrink_factor(0.1);
+        trainer_lr.set_mini_batch_size(minibatch_size);
+        trainer_lr.set_iterations_without_progress_threshold(patience);
+        trainer_lr.set_min_learning_rate(min_learning_rate);
+        trainer_lr.be_verbose();        
+        set_all_bn_running_stats_window_sizes(net_lr, 1000);
+        // --
+        dnn_trainer<net_type_hr> trainer_hr(net_hr, sgd(weight_decay, momentum));
+        trainer_hr.set_learning_rate(learning_rate);
+        trainer_hr.set_learning_rate_shrink_factor(0.1);
+        trainer_hr.set_mini_batch_size(minibatch_size);
+        trainer_hr.set_iterations_without_progress_threshold(patience);
+        trainer_hr.set_min_learning_rate(min_learning_rate);
+        trainer_hr.be_verbose();
+        set_all_bn_running_stats_window_sizes(net_hr, 1000);
 
         // Output training parameters
-        training_sample_lr sample;
+        training_sample sample;
         const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
         matrix<rgb_pixel> input_image;
         load_image(input_image, image_info.full_name());
-        randomly_crop_image(input_image, sample, rnd);
-        generator(sample.input_image);
-        
-        std::cout << "The network has " << generator.num_layers << " layers in it." << std::endl;
-        std::cout << generator << std::endl;
-        std::cout << std::endl << trainer << std::endl;
+        randomly_crop_image(input_image, sample, rnd, classification_training);
+        if (classification_training) {
+            net_lr(sample.input_image);
+            std::cout << net_lr << std::endl;
+            std::cout << "The network has " << net_lr.num_layers << " layers in it" << std::endl;
+            std::cout << std::endl << trainer_lr << std::endl;
+        } else {
+            net_hr(sample.input_image);
+            std::cout << net_hr << std::endl;
+            std::cout << "The network has " << net_hr.num_layers << " layers in it" << std::endl;
+            std::cout << std::endl << trainer_hr << std::endl;
+        }        
         // Total images in the dataset
         std::cout << "images in dataset: " << training_images.size() << endl;
 
         // Use some threads to preload images
-        dlib::pipe<training_sample_lr> data(minibatch_size);
-        auto f = [&data, &training_images](time_t seed) {
+        dlib::pipe<training_sample> data(minibatch_size);
+        auto f = [&data, &training_images, &classification_training](time_t seed) {
             dlib::rand rnd(time(nullptr) + seed);
             matrix<rgb_pixel> input_image;
-            training_sample_lr temp;
+            training_sample temp;
             while (data.is_enabled()) {
                 const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
                 try { 
                     load_image(input_image, image_info.full_name());
-                    randomly_crop_image(input_image, temp, rnd);
+                    randomly_crop_image(input_image, temp, rnd, classification_training);
                     data.enqueue(temp);
                 } catch (...) {
                     cerr << "Error during image loading: " << image_info.full_name() << endl;
@@ -335,48 +313,73 @@ int main(int argc, char** argv) try {
         while (data.size() < minibatch_size) std::this_thread::sleep_for(std::chrono::seconds(1));
         std::cout << "done" << std::endl;
 
-        std::vector<matrix<uint16_t>> labels;
+        std::vector<matrix<uint16_t>> lr_labels;
         std::vector<matrix<weighted_label_>> weighted_labels;
+        std::vector<std::array<matrix<float>, 2>> hr_labels;
         std::vector<matrix<gray_pixel>> samples;
         dlib::image_window win;
         while (!g_interrupted) {
             // Train
-            labels.clear();
+            lr_labels.clear();
             weighted_labels.clear();
+            hr_labels.clear();
             samples.clear();
             while (samples.size() < minibatch_size) {
                 data.dequeue(sample);
-                labels.push_back(sample.output_image);
-                weighted_labels.push_back(sample.weighted_output_image);
                 samples.push_back(sample.input_image);
+                if (classification_training) {
+                    lr_labels.push_back(sample.lr_output_image);
+                    weighted_labels.push_back(sample.weighted_output_image);
+                } else {
+                    hr_labels.push_back(sample.hr_output_image);
+                }
             }            
             if (++iteration % update_display == 0) { // We should see that the generated images start looking like samples
                 std::vector<matrix<rgb_pixel>> disp_imgs;
                 matrix<rgb_pixel> src_img, rgb_gen, image_to_save;
-                trainer.get_net(dlib::force_flush_to_disk::no);
-                auto gen_samples = generator(samples);
-                size_t pos_i = 0, max_iter = __min(gen_samples.size(), 4);
-                for (auto& image : gen_samples) {
-                    src_img = concat_channels(samples[pos_i], labels[pos_i]);
-                    rgb_gen = concat_channels(samples[pos_i], image);
-                    disp_imgs.push_back(join_rows(src_img, rgb_gen));
-                    if (++pos_i >= max_iter) break;
+                size_t pos_i = 0, max_iter = __min(samples.size(), 4);
+                if (classification_training) {
+                    trainer_lr.get_net(dlib::force_flush_to_disk::no);
+                    auto gen_samples = net_lr(samples);                    
+                    for (auto& image : gen_samples) {
+                        src_img = concat_channels(samples[pos_i], lr_labels[pos_i]);
+                        rgb_gen = concat_channels(samples[pos_i], image);
+                        disp_imgs.push_back(join_rows(src_img, rgb_gen));
+                        if (++pos_i >= max_iter) break;
+                    }
+                } else {
+                    trainer_hr.get_net(dlib::force_flush_to_disk::no);
+                    auto gen_samples = net_hr(samples);                    
+                    for (auto& image : gen_samples) {
+                        src_img = concat_channels(samples[pos_i], hr_labels[pos_i]);
+                        rgb_gen = concat_channels(samples[pos_i], image);
+                        disp_imgs.push_back(join_rows(src_img, rgb_gen));
+                        if (++pos_i >= max_iter) break;
+                    }
                 }
                 image_to_save = tile_images(disp_imgs);
-                save_jpeg(image_to_save, "lowres_model_training.jpg", 90);
+                if (classification_training) save_jpeg(image_to_save, "lowres_model_training.jpg", 90);
+                else save_jpeg(image_to_save, "highres_model_training.jpg", 90);
                 win.set_image(image_to_save);
                 win.set_title("COLORIFY - Supervised-learning process, step#: " + to_string(iteration) + " - " + to_string(max_iter) + " samples");
             }
-            trainer.train_one_step(samples, weighted_labels);
+            if (classification_training) trainer_lr.train_one_step(samples, weighted_labels);
+            else trainer_hr.train_one_step(samples, hr_labels);
             // Check if the model has to be saved
             if (iteration % 200 == 0) {
                 chrono::time_point<chrono::system_clock> current_time = chrono::system_clock::now();
                 double minutes_elapsed = chrono::duration_cast<chrono::minutes>(current_time - state.last_run_time).count();                
                 if (minutes_elapsed >= max_minutes_elapsed) {
-                    trainer.get_net(dlib::force_flush_to_disk::no);
-                    generator.clean();
-                    serialize("lowres_colorify.dnn") << generator;
-                    cout << "checkpoint#:\tModel <lowres_colorify.dnn> saved on disk" << endl;
+                    if (classification_training) {
+                        trainer_lr.get_net(dlib::force_flush_to_disk::no);
+                        net_lr.clean();
+                        serialize(model_name) << net_lr;
+                    } else {
+                        trainer_hr.get_net(dlib::force_flush_to_disk::no);
+                        net_hr.clean();
+                        serialize(model_name) << net_hr;
+                    }
+                    cout << "checkpoint#:\tModel <" << model_name << "> saved on disk" << endl;
                     state.last_run_time = current_time;
                 }
             }
@@ -387,168 +390,49 @@ int main(int argc, char** argv) try {
 
         // Once the training has finished, we don't need the discriminator any more. We just keep the generator
         // We also save the checkpoint again to iterate the learning process
-        trainer.get_net();
-        generator.clean();
-        serialize("lowres_colorify.dnn") << generator;
-    } else if (vm.count("regression")) {
-        const std::vector<file> training_images = dlib::get_files_in_directory_tree(vm["regression"].as<string>(), dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
-        if (training_images.size() == 0) {
-            std::cout << "Didn't find images for the training dataset." << endl;
-            return EXIT_FAILURE;
+        if (classification_training) {
+            trainer_lr.get_net(dlib::force_flush_to_disk::no);
+            net_lr.clean();
+            serialize(model_name) << net_lr;
+        } else {
+            trainer_hr.get_net(dlib::force_flush_to_disk::no);
+            net_hr.clean();
+            serialize(model_name) << net_hr;
         }
-        current_state state;
-        state.first_run_time = chrono::system_clock::now();
-        state.last_run_time = state.first_run_time;
-
-        // Instantiate both generator        
-        const size_t minibatch_size = 22;        
-        dlib::rand rnd(time(nullptr));
-        set_dnn_prefer_fastest_algorithms();
-        hr_generator_type generator;
-
-        // Resume training from last sync file
-        if (file_exists("highres_colorify.dnn")) deserialize("highres_colorify.dnn") >> generator;
-
-        const double learning_rate = (training_images.size() < 5000) ? 1e-1 : 1e-2;
-        const double min_learning_rate = 1e-6;
-        const double weight_decay = 1e-4;
-        const double momentum = 0.9;
-        const long patience = (training_images.size() < 5000) ? 5000 : 15000;
-        const long update_display = 50;
-        const long max_minutes_elapsed = 8;
-
-        // Initialize the trainer
-        dnn_trainer<hr_generator_type> trainer(generator, sgd(weight_decay, momentum));
-        trainer.set_learning_rate(learning_rate);
-        trainer.set_learning_rate_shrink_factor(0.1);
-        trainer.set_mini_batch_size(minibatch_size);
-        trainer.set_iterations_without_progress_threshold(patience);
-        trainer.set_min_learning_rate(min_learning_rate);
-        trainer.be_verbose();
-        set_all_bn_running_stats_window_sizes(generator, 1000);
-
-        // Output training parameters
-        training_sample_hr sample;
-        const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
-        matrix<rgb_pixel> input_image;
-        load_image(input_image, image_info.full_name());
-        randomly_crop_image(input_image, sample, rnd);
-        generator(sample.input_image);
-
-        std::cout << "The network has " << generator.num_layers << " layers in it." << std::endl;
-        std::cout << generator << std::endl;
-        std::cout << std::endl << trainer << std::endl;
-        // Total images in the dataset
-        std::cout << "images in dataset: " << training_images.size() << endl;
-
-        // Use some threads to preload images
-        dlib::pipe<training_sample_hr> data(minibatch_size);
-        auto f = [&data, &training_images](time_t seed) {
-            dlib::rand rnd(time(nullptr) + seed);
-            matrix<rgb_pixel> input_image;
-            training_sample_hr temp;
-            while (data.is_enabled()) {
-                const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
-                try { 
-                    load_image(input_image, image_info.full_name());
-                    randomly_crop_image(input_image, temp, rnd);
-                    data.enqueue(temp);
-                } catch (...) {
-                    cerr << "Error during image loading: " << image_info.full_name() << endl;
-                }                
-            }
-        };
-        std::thread data_loader1([f]() { f(1); });
-        std::thread data_loader2([f]() { f(2); });
-        std::cout << "Waiting for the initial pipe loading... ";
-        while (data.size() < minibatch_size) std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "done" << std::endl;
-
-        std::vector<std::array<matrix<float>, 2>> labels;
-        std::vector<matrix<gray_pixel>> samples;
-        dlib::image_window win;
-        while (!g_interrupted) {
-            // Train
-            labels.clear();
-            samples.clear();
-            while (samples.size() < minibatch_size) {
-                data.dequeue(sample);
-                labels.push_back(sample.output_image);
-                samples.push_back(sample.input_image);
-            }            
-            if (++iteration % update_display == 0) { // We should see that the generated images start looking like samples
-                std::vector<matrix<rgb_pixel>> disp_imgs;
-                matrix<rgb_pixel> src_img, rgb_gen, image_to_save;
-                trainer.get_net(dlib::force_flush_to_disk::no);
-                auto gen_samples = generator(samples);
-                size_t pos_i = 0, max_iter = __min(gen_samples.size(), 4);
-                for (auto& image : gen_samples) {
-                    src_img = concat_channels(samples[pos_i], labels[pos_i]);
-                    rgb_gen = concat_channels(samples[pos_i], image);
-                    disp_imgs.push_back(join_rows(src_img, rgb_gen));
-                    if (++pos_i >= max_iter) break;
-                }
-                image_to_save = tile_images(disp_imgs);
-                save_jpeg(image_to_save, "highres_model_training.jpg");
-                win.set_image(image_to_save);
-                win.set_title("COLORIFY - Supervised-learning process, step#: " + to_string(iteration) + " - " + to_string(max_iter) + " samples");
-            }
-            trainer.train_one_step(samples, labels);
-            // Check if the model has to be saved
-            if (iteration % 200 == 0) {
-                chrono::time_point<chrono::system_clock> current_time = chrono::system_clock::now();
-                double minutes_elapsed = chrono::duration_cast<chrono::minutes>(current_time - state.last_run_time).count();                
-                if (minutes_elapsed >= max_minutes_elapsed) {
-                    trainer.get_net(dlib::force_flush_to_disk::no);
-                    generator.clean();
-                    serialize("highres_colorify.dnn") << generator;
-                    cout << "checkpoint#:\tModel <highres_colorify.dnn> saved on disk" << endl;
-                    state.last_run_time = current_time;
-                }
-            }
-        }
-        data.disable();
-        data_loader1.join();
-        data_loader2.join();
-
-        // Once the training has finished, we don't need the discriminator any more. We just keep the generator
-        // We also save the checkpoint again to iterate the learning process
-        trainer.get_net();
-        generator.clean();
-        serialize("highres_colorify.dnn") << generator;
-    } else if (vm.count("class-test") || vm.count("reg-test")) {
-        bool use_lr_model = vm.count("class-test");
-        const string input_dir = use_lr_model ? vm["class-test"].as<string>() : vm["reg-test"].as<string>();
+    } else if (vm.count("classification-test") || vm.count("regression-test")) {
+        bool use_lr_model = vm.count("classification-test");
+        const string input_dir = use_lr_model ? vm["classification-test"].as<string>() : vm["regression-test"].as<string>();
         const std::vector<file> images = dlib::get_files_in_directory_tree(input_dir, dlib::match_endings(".jpeg .jpg .png"));
         std::cout << "total images to colorify: " << images.size() << endl;
         if (images.size() == 0) {
-            std::cout << "Didn't find images to colorify." << endl;
+            std::cout << "Didn't find images to colorify" << endl;
             return EXIT_FAILURE;
         }
 
         // Load the mode
-        dlib::rand rnd(time(nullptr));        
-        lr_generator_type lr_generator;
-        hr_generator_type hr_generator;
+        dlib::rand rnd(time(nullptr));
+        const string model_name = use_lr_model ? "lowres_colorify.dnn" : "highres_colorify.dnn";
+        using net_type_lr = loss_multiclass_log_per_pixel_weighted<cont<256, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
+        using net_type_hr = loss_mean_squared_per_channel_and_pixel<2, cont<2, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
+        net_type_lr net_lr;
+        net_type_hr net_hr;
         if (use_lr_model) {
-            if (file_exists("lowres_colorify.dnn")) {
-                deserialize("lowres_colorify.dnn") >> lr_generator;
-            } else {
-                std::cout << "Didn't find the model (lowres_colorify.dnn)." << endl;
+            if (file_exists(model_name)) deserialize(model_name) >> net_lr;
+            else {
+                std::cout << "Didn't find the precomputed model: " << model_name << endl;
                 return EXIT_FAILURE;
             }
         } else {
-            if (file_exists("highres_colorify.dnn")) {
-                deserialize("highres_colorify.dnn") >> hr_generator;
-            } else {
-                std::cout << "Didn't find the model (highres_colorify.dnn)." << endl;
+            if (file_exists(model_name)) deserialize(model_name) >> net_hr;
+            else {
+                std::cout << "Didn't find the precomputed model: " << model_name << endl;
                 return EXIT_FAILURE;
             }
-        }        
+        }
 
         dlib::image_window win;
         matrix<rgb_pixel> input_image, gen_image, display_gray_image;
-        matrix<gray_pixel> gray_image;        
+        matrix<gray_pixel> gray_image, temp_gray_image;        
         for (auto& i : images) {            
             try { load_image(input_image, i.full_name()); }
             catch (...) {
@@ -560,7 +444,27 @@ int main(int argc, char** argv) try {
             rgb_image_to_grayscale_image(input_image, gray_image);
             assign_image(display_gray_image, gray_image);         
 
-            gen_image = use_lr_model ? generate_image(lr_generator, gray_image) : generate_image(hr_generator, gray_image);
+            {
+                assign_image(temp_gray_image, gray_image);
+                resize_inplace(temp_gray_image, std_image_size);
+                matrix<rgb_pixel> rgb_image, blur_image;
+                if (use_lr_model) {
+                    matrix<uint16_t> output = net_lr(temp_gray_image);
+                    rgb_image = concat_channels(temp_gray_image, output);
+                } else {
+                    std::array<matrix<float>, 2> output = net_hr(temp_gray_image);
+                    rgb_image = concat_channels(temp_gray_image, output);
+                }
+                gaussian_blur(rgb_image, blur_image, 0.7);
+                scale_image(gray_image.nr(), gray_image.nc(), blur_image);
+                matrix<lab_pixel> lab_image;
+                assign_image(lab_image, blur_image);
+                for (long r = 0; r < lab_image.nr(); ++r)
+                    for (long c = 0; c < lab_image.nc(); ++c)
+                        lab_image(r, c).l = gray_image(r, c);
+                assign_image(rgb_image, lab_image);
+            }
+            
             win.set_title("COLORIFY - Grayscale " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Original | Generated (" + to_string(gen_image.nc()) + "x" + to_string(gen_image.nr()) + ")");
             win.set_image(join_rows(display_gray_image, join_rows(input_image, gen_image)));
             std::cout << i.full_name() << " - Hit enter to process the next image or 'q' to quit";
