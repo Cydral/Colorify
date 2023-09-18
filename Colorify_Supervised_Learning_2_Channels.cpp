@@ -12,6 +12,10 @@ namespace po = boost::program_options;
 namespace fs = std::filesystem;
 using weighted_label_ = loss_multiclass_log_per_pixel_weighted_::weighted_label;
 
+using net_backbone = generator_backbone<input<matrix<gray_pixel>>>;
+using net_type_lr = loss_multiclass_log_per_pixel_weighted<cont<256, 1, 1, 1, 1, net_backbone>>;
+using net_type_hr = loss_mean_squared_per_channel_and_pixel<2, cont<2, 1, 1, 1, 1, net_backbone>>;
+
 // ----------------------------------------------------------------------------------------
 const bool do_color_reduction = false;
 struct training_sample {
@@ -192,13 +196,16 @@ void normalize_images(const std::string& rootDir) {
 }
 
 int main(int argc, char** argv) try {
-    po::options_description desc("Program options");    
+    bool import_backbone = false;
+    po::options_description desc("Program options");
     desc.add_options()
         ("normalization", po::value<string>(), "normalize images <dir>")
         ("classification", po::value<string>(), "train classification model <dir>")
         ("regression", po::value<string>(), "train regression model <dir>")
         ("classification-test", po::value<string>(), "test classification model <dir>")
         ("regression-test", po::value<string>(), "test regression model <dir>")
+        ("export-backbone", po::value<string>(), "export backbone from a model <model name>")
+        ("import-backbone", po::bool_switch(&import_backbone)->default_value(false), "import backbone to initiate a model")
         ("help", "this help message");
 
     po::variables_map vm;
@@ -216,6 +223,23 @@ int main(int argc, char** argv) try {
 
     if (vm.count("normalization")) {
         normalize_images(vm["normalization"].as<string>());
+    } else if (vm.count("export-backbone")) {
+        const string input_model = vm["export-backbone"].as<string>();
+        std::vector<string> model_names = { "lowres_colorify.dnn", "highres_colorify.dnn", "backbone_colorify.dnn" };
+        net_type_lr net_lr;
+        net_type_hr net_hr;
+        net_backbone sub_net;
+        if (input_model == model_names[0]) {
+            if (file_exists(input_model)) deserialize(input_model) >> net_lr;
+            sub_net = layer<2>(net_lr);
+        } if (input_model == model_names[1]) {
+            if (file_exists(input_model)) deserialize(input_model) >> net_hr;
+            sub_net = layer<2>(net_hr);
+        } else {
+            cout << "You can only use <" << model_names[0] << "> or <" << model_names[1] << "> as input model" << endl;
+            return EXIT_FAILURE;
+        }
+        serialize(model_names[2]) << sub_net;
     } else if (vm.count("classification") || vm.count("regression")) {
         const bool classification_training = vm.count("classification");
         const string input_dir = classification_training ? vm["classification"].as<string>() : vm["regression"].as<string>();
@@ -233,15 +257,27 @@ int main(int argc, char** argv) try {
         dlib::rand rnd(time(nullptr));
         set_dnn_prefer_fastest_algorithms();
         const string model_name = classification_training ? "lowres_colorify.dnn" : "highres_colorify.dnn";
-        using net_type_lr = loss_multiclass_log_per_pixel_weighted<cont<256, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
-        using net_type_hr = loss_mean_squared_per_channel_and_pixel<2, cont<2, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
         net_type_lr net_lr;
         net_type_hr net_hr;
         if (classification_training) {
             if (file_exists(model_name)) deserialize(model_name) >> net_lr;
+            if (import_backbone && file_exists("backbone_colorify.dnn")) {
+                cout << "Loading backbone... ";
+                net_backbone sub_net;
+                deserialize("backbone_colorify.dnn") >> sub_net;
+                layer<2>(net_lr) = sub_net;
+                cout << "done\n";
+            }
         } else {
             if (file_exists(model_name)) deserialize(model_name) >> net_hr;
-        }
+            if (import_backbone && file_exists("backbone_colorify.dnn")) {
+                cout << "Loading backbone... ";
+                net_backbone sub_net;
+                deserialize("backbone_colorify.dnn") >> sub_net;
+                layer<2>(net_hr) = sub_net;
+                cout << "done\n";
+            }
+        }        
 
         const double learning_rate = (training_images.size() < 5000) ? 1e-1 : 1e-2;
         const double min_learning_rate = 1e-6;
@@ -412,8 +448,6 @@ int main(int argc, char** argv) try {
         // Load the mode
         dlib::rand rnd(time(nullptr));
         const string model_name = use_lr_model ? "lowres_colorify.dnn" : "highres_colorify.dnn";
-        using net_type_lr = loss_multiclass_log_per_pixel_weighted<cont<256, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
-        using net_type_hr = loss_mean_squared_per_channel_and_pixel<2, cont<2, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
         net_type_lr net_lr;
         net_type_hr net_hr;
         if (use_lr_model) {
@@ -431,7 +465,7 @@ int main(int argc, char** argv) try {
         }
 
         dlib::image_window win;
-        matrix<rgb_pixel> input_image, gen_image, display_gray_image;
+        matrix<rgb_pixel> input_image, rgb_image, blur_image, display_gray_image;
         matrix<gray_pixel> gray_image, temp_gray_image;        
         for (auto& i : images) {            
             try { load_image(input_image, i.full_name()); }
@@ -440,14 +474,13 @@ int main(int argc, char** argv) try {
                 continue;
             }
             if (is_grayscale(input_image) || is_two_small(input_image)) continue;
-            resize_max(input_image, std_image_size);
+            resize_max(input_image, std_image_size * 2);
             rgb_image_to_grayscale_image(input_image, gray_image);
             assign_image(display_gray_image, gray_image);         
-
+            // ---
             {
                 assign_image(temp_gray_image, gray_image);
                 resize_inplace(temp_gray_image, std_image_size);
-                matrix<rgb_pixel> rgb_image, blur_image;
                 if (use_lr_model) {
                     matrix<uint16_t> output = net_lr(temp_gray_image);
                     rgb_image = concat_channels(temp_gray_image, output);
@@ -464,9 +497,9 @@ int main(int argc, char** argv) try {
                         lab_image(r, c).l = gray_image(r, c);
                 assign_image(rgb_image, lab_image);
             }
-            
-            win.set_title("COLORIFY - Grayscale " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Original | Generated (" + to_string(gen_image.nc()) + "x" + to_string(gen_image.nr()) + ")");
-            win.set_image(join_rows(display_gray_image, join_rows(input_image, gen_image)));
+            // ---
+            win.set_title("COLORIFY - Grayscale " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Original | Generated (" + to_string(rgb_image.nc()) + "x" + to_string(rgb_image.nr()) + ")");
+            win.set_image(join_rows(display_gray_image, join_rows(input_image, rgb_image)));
             std::cout << i.full_name() << " - Hit enter to process the next image or 'q' to quit";
             char c = std::cin.get();
             if (c == 'q' || c == 'Q') break;
