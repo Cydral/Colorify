@@ -101,17 +101,6 @@ template <typename SUBNET> using generator_backbone =
     level1<max_pool<3, 3, 2, 2, utag1<
     relu<bn_con<con<64, 7, 7, 2, 2, SUBNET>>>>>>>>>>>>>>>>>>>>>>>;
 
-using lr_generator_type = loss_multiclass_log_per_pixel_weighted<
-    cont<256, 1, 1, 1, 1,
-    generator_backbone<
-    input<matrix<gray_pixel>>
-    >>>;
-using hr_generator_type = loss_mean_squared_per_channel_and_pixel<2,
-    cont<2, 1, 1, 1, 1,
-    generator_backbone<
-    input<matrix<gray_pixel>>
-    >>>;
-
 // ----------------------------------------------------------------------------------------
 // RGB to grayscale image conversion
 void rgb_image_to_grayscale_image(const matrix<dlib::rgb_pixel>& rgb_image, matrix<gray_pixel>& gray_image) {
