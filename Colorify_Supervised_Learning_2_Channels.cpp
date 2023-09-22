@@ -248,10 +248,10 @@ int main(int argc, char** argv) try {
         net_type_hr net_hr;
         net_backbone sub_net;
         cout << "Exporting the network backbone in progress... ";
-        if (input_model.find(model_names[0]) != string::npos) {
+        if (input_model.find(model_names[0]) != std::string::npos) {
             if (file_exists(input_model)) deserialize(input_model) >> net_lr;
             sub_net = layer<2>(net_lr);
-        } if (input_model.find(model_names[1]) != string::npos) {
+        } else if (input_model.find(model_names[1]) != std::string::npos) {
             if (file_exists(input_model)) deserialize(input_model) >> net_hr;
             sub_net = layer<2>(net_hr);
         } else {
@@ -300,10 +300,10 @@ int main(int argc, char** argv) try {
         }        
 
         const double learning_rate = (training_images.size() < 3000) ? 1e-1 : 1e-2;
-        const double min_learning_rate = 1e-6;
+        const double min_learning_rate = 1e-3;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
-        const long patience = (training_images.size() < 3000) ? 5000 : 10000;
+        const long patience = (training_images.size() < 3000) ? 5000 : 15000;
         const long update_display = 50;
         const long max_minutes_elapsed = 5;
 
@@ -325,6 +325,9 @@ int main(int argc, char** argv) try {
         trainer_hr.set_min_learning_rate(min_learning_rate);
         trainer_hr.be_verbose();
         set_all_bn_running_stats_window_sizes(net_hr, 1000);
+        double cur_learning_rate = classification_training ? trainer_lr.get_learning_rate() : trainer_hr.get_learning_rate();
+        disable_duplicative_biases(net_lr);
+        disable_duplicative_biases(net_hr);
 
         // Output training parameters
         training_sample sample;
@@ -374,7 +377,7 @@ int main(int argc, char** argv) try {
         std::vector<std::array<matrix<float>, 2>> hr_labels;
         std::vector<matrix<gray_pixel>> samples;
         dlib::image_window win;
-        while (!g_interrupted) {
+        while (!g_interrupted && cur_learning_rate > min_learning_rate) {
             // Train
             lr_labels.clear();
             weighted_labels.clear();
@@ -419,10 +422,11 @@ int main(int argc, char** argv) try {
                 if (classification_training) save_jpeg(image_to_save, "lowres_model_training.jpg", 90);
                 else save_jpeg(image_to_save, "highres_model_training.jpg", 90);
                 win.set_image(image_to_save);
-                win.set_title("COLORIFY - Supervised-learning process, step#: " + to_string(iteration) + " - " + to_string(max_iter) + " samples");
+                win.set_title("COLORIFY - Supervised-learning process, step#: " + to_string(iteration) + " - " + to_string(max_iter) + " samples - Original | Grayscale | Colorized");
             }
             if (classification_training) trainer_lr.train_one_step(samples, weighted_labels);
             else trainer_hr.train_one_step(samples, hr_labels);
+            cur_learning_rate = classification_training ? trainer_lr.get_learning_rate() : trainer_hr.get_learning_rate();
             // Check if the model has to be saved
             if (iteration % 200 == 0) {
                 chrono::time_point<chrono::system_clock> current_time = chrono::system_clock::now();
@@ -469,12 +473,12 @@ int main(int argc, char** argv) try {
         state.last_run_time = state.first_run_time;
 
         // Instantiate the model        
-        const size_t minibatch_size = 26;
+        const size_t minibatch_size = 30;
         const long update_display = 50;
         const long max_minutes_elapsed = 5;
         dlib::rand rnd(time(nullptr));
         set_dnn_prefer_fastest_algorithms();
-        const string model_name = "dcgan_colorify.dnn";
+        const string model_name = "highres_colorify.dnn";
         net_type_hr net_hr;
         net_discriminator net_d;
         visit_computational_layers(net_d, [](leaky_relu_& l) { l = leaky_relu_(0.2); });
@@ -552,7 +556,7 @@ int main(int argc, char** argv) try {
             // Train the discriminator with real images
             norm_output_images(output_samples);
             net_d.to_tensor(output_samples.begin(), output_samples.end(), real_samples_tensor);
-            net_d.forward(real_samples_tensor);
+            //net_d.forward(real_samples_tensor);
             d_loss.add(net_d.compute_loss(real_samples_tensor, real_labels.begin()));
             net_d.back_propagate_error(real_samples_tensor);
             net_d.update_parameters(d_solvers, learning_rate);
@@ -563,7 +567,7 @@ int main(int argc, char** argv) try {
             auto gen_samples = net_hr(gray_samples);
             norm_output_images(gen_samples);
             net_d.to_tensor(gen_samples.begin(), gen_samples.end(), gen_samples_tensor);
-            net_d.forward(gen_samples_tensor);
+            //net_d.forward(gen_samples_tensor);
             d_loss.add(net_d.compute_loss(gen_samples_tensor, gen_labels.begin()));
             net_d.back_propagate_error(gen_samples_tensor);
             net_d.update_parameters(d_solvers, learning_rate);
@@ -615,7 +619,7 @@ int main(int argc, char** argv) try {
                     if (++pos_i >= max_iter) break;
                 }
                 win.set_image(tile_images(disp_imgs));
-                win.set_title("COLORIFY - GAN-learning process, step#: " + to_string(iteration) + " - " + to_string(max_iter) + " samples");
+                win.set_title("COLORIFY - GAN-learning process, step#: " + to_string(iteration) + " - " + to_string(max_iter) + " samples - Original | Grayscale | Colorized");
             }
             if (iteration % 100 == 0) { // Standard progress
                 std::cout << "step#: " << iteration << "\tdiscriminator loss: " << d_loss.mean() * 2 <<
@@ -710,8 +714,8 @@ int main(int argc, char** argv) try {
                 assign_image(rgb_image, lab_image);
             }
             // ---
-            win.set_title("COLORIFY - Grayscale " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Original | Generated (" + to_string(rgb_image.nc()) + "x" + to_string(rgb_image.nr()) + ")");
-            win.set_image(join_rows(display_gray_image, join_rows(input_image, rgb_image)));
+            win.set_title("COLORIFY - Original " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Grayscale | Generated (" + to_string(rgb_image.nc()) + "x" + to_string(rgb_image.nr()) + ")");
+            win.set_image(join_rows(input_image, join_rows(display_gray_image, rgb_image)));
             std::cout << i.full_name() << " - Hit enter to process the next image or 'q' to quit";
             char c = std::cin.get();
             if (c == 'q' || c == 'Q') break;
