@@ -9,6 +9,7 @@ Our approach leverages a robust dataset comprising more than 250,000 images, ens
 
 <h2>Overview</h2>
 <p>The Colorify program is designed to infuse life into monochromatic images by applying state-of-the-art image colorization techniques. It employs a DCGAN, a type of GAN composed of two networks: a Generator and a Discriminator. The Generator network is built on a U-Net architecture, while the Discriminator network utilizes a series of filters with or without activation. This combination allows Colorify to learn and replicate intricate color patterns, producing visually appealing colorizations.</p>
+<p>Whichever method you choose, the program also offers a progressive display of the results and the performance of the current learning model for the colorization task. Additionally, the backbone used for understanding the intrinsic features of the image can be extracted and injected into each learning process (transfer learning), allowing you to leverage the outcomes of previous training for enhanced performance.</p>
 <p align="center"><img src="https://github.com/Cydral/Colorify/blob/main/artictic-depiction-GAN-process.jpg" alt="Artistic depection of GAN process for color image generation"></p>
 
 <h2>Training Data and Process</h2>
