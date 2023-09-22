@@ -5,6 +5,7 @@ Our approach leverages a robust dataset comprising more than 250,000 images, ens
 
 <h2>Description</h2>
 <p>Colorify is a comprehensive C++ application that harnesses the capabilities of generative models to perform automated colorization of black and white images. It employs a sophisticated neuronal architecture to achieve this task. When given a grayscale image as input, Colorify utilizes generative AI models (two pre-calculated models are provided that can also be fine-tuned) to produce a fully colorized version.</p>
+<p>The program opens the way to a multitude of use cases. Although it excels in static image enhancement, its potential extends far beyond this, as it can also be used for automated movie colorization. Drawing on the latest developments in the Dlib image processing library, we have also provided a dedicated "ready-to-use" program, designed specifically for video colorization. This comprehensive suite enables users to bring individual images and entire film sequences to life with unrivalled ease and efficiency.</p>
 
 <h2>Overview</h2>
 <p>The Colorify program is designed to infuse life into monochromatic images by applying state-of-the-art image colorization techniques. It employs a DCGAN, a type of GAN composed of two networks: a Generator and a Discriminator. The Generator network is built on a U-Net architecture, while the Discriminator network utilizes a series of filters with or without activation. This combination allows Colorify to learn and replicate intricate color patterns, producing visually appealing colorizations.</p>
