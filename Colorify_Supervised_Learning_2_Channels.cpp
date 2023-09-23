@@ -273,7 +273,7 @@ int main(int argc, char** argv) try {
         state.last_run_time = state.first_run_time;
 
         // Instantiate the model        
-        const size_t minibatch_size = 22;
+        const size_t minibatch_size = 24;
         dlib::rand rnd(time(nullptr));
         set_dnn_prefer_fastest_algorithms();
         const string model_name = classification_training ? "lowres_colorify.dnn" : "highres_colorify.dnn";
@@ -690,7 +690,8 @@ int main(int argc, char** argv) try {
                 cerr << "Error during image loading: " << i.full_name() << endl;
                 continue;
             }
-            if (is_grayscale(input_image) || is_two_small(input_image)) continue;
+            if (is_two_small(input_image)) continue;
+            const bool is_grayscale_image = is_grayscale(input_image);
             resize_max(input_image, std_image_size * 2);
             rgb_image_to_grayscale_image(input_image, gray_image);
             assign_image(display_gray_image, gray_image);         
@@ -714,8 +715,13 @@ int main(int argc, char** argv) try {
                 assign_image(rgb_image, lab_image);
             }
             // ---
-            win.set_title("COLORIFY - Original " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Grayscale | Generated (" + to_string(rgb_image.nc()) + "x" + to_string(rgb_image.nr()) + ")");
-            win.set_image(join_rows(input_image, join_rows(display_gray_image, rgb_image)));
+            if (is_grayscale_image) {
+                win.set_title("COLORIFY - Original (grayscale) " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Generated (" + to_string(rgb_image.nc()) + "x" + to_string(rgb_image.nr()) + ")");
+                win.set_image(join_rows(input_image, rgb_image));
+            } else {
+                win.set_title("COLORIFY - Original " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Grayscale | Generated (" + to_string(rgb_image.nc()) + "x" + to_string(rgb_image.nr()) + ")");
+                win.set_image(join_rows(input_image, join_rows(display_gray_image, rgb_image)));
+            }
             std::cout << i.full_name() << " - Hit enter to process the next image or 'q' to quit";
             char c = std::cin.get();
             if (c == 'q' || c == 'Q') break;
