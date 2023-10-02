@@ -213,7 +213,7 @@ void norm_output_images(std::vector<std::array<matrix<float>, 2>>& output_images
 
 
 int main(int argc, char** argv) try {
-    bool import_backbone = false;
+    bool import_backbone = false, blur_channels = false, boost_colors = false;
     po::options_description desc("Program options");
     desc.add_options()
         ("normalization", po::value<string>(), "normalize images <dir>")
@@ -224,6 +224,8 @@ int main(int argc, char** argv) try {
         ("regression-test", po::value<string>(), "test regression model <dir>")
         ("export-backbone", po::value<string>(), "export backbone from a model <model name>")
         ("import-backbone", po::bool_switch(&import_backbone)->default_value(false), "import backbone to initiate a model")
+        ("blur-channels", po::bool_switch(&blur_channels)->default_value(false), "apply slight blur to the color channels")
+        ("boost-colors", po::bool_switch(&boost_colors)->default_value(false), "enhance the vibrancy of colors")
         ("help", "this help message");
 
     po::variables_map vm;
@@ -273,7 +275,7 @@ int main(int argc, char** argv) try {
         state.last_run_time = state.first_run_time;
 
         // Instantiate the model        
-        const size_t minibatch_size = 24;
+        const size_t minibatch_size = 16;
         dlib::rand rnd(time(nullptr));
         set_dnn_prefer_fastest_algorithms();
         const string model_name = classification_training ? "lowres_colorify.dnn" : "highres_colorify.dnn";
@@ -299,11 +301,11 @@ int main(int argc, char** argv) try {
             }
         }        
 
-        const double learning_rate = (training_images.size() < 3000) ? 1e-1 : 1e-2;
-        const double min_learning_rate = 1e-3;
+        const double learning_rate = (training_images.size() < 3000) ? 1e-1 : 1e-1;
+        const double min_learning_rate = 1e-5;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
-        const long patience = (training_images.size() < 3000) ? 5000 : 15000;
+        const long patience = (training_images.size() < 3000) ? 10000 : 30000;
         const long update_display = 50;
         const long max_minutes_elapsed = 5;
 
@@ -556,7 +558,7 @@ int main(int argc, char** argv) try {
             // Train the discriminator with real images
             norm_output_images(output_samples);
             net_d.to_tensor(output_samples.begin(), output_samples.end(), real_samples_tensor);
-            //net_d.forward(real_samples_tensor);
+            net_d.forward(real_samples_tensor);
             d_loss.add(net_d.compute_loss(real_samples_tensor, real_labels.begin()));
             net_d.back_propagate_error(real_samples_tensor);
             net_d.update_parameters(d_solvers, learning_rate);
@@ -567,7 +569,7 @@ int main(int argc, char** argv) try {
             auto gen_samples = net_hr(gray_samples);
             norm_output_images(gen_samples);
             net_d.to_tensor(gen_samples.begin(), gen_samples.end(), gen_samples_tensor);
-            //net_d.forward(gen_samples_tensor);
+            net_d.forward(gen_samples_tensor);
             d_loss.add(net_d.compute_loss(gen_samples_tensor, gen_labels.begin()));
             net_d.back_propagate_error(gen_samples_tensor);
             net_d.update_parameters(d_solvers, learning_rate);
@@ -707,12 +709,27 @@ int main(int argc, char** argv) try {
                     rgb_image = concat_channels(temp_gray_image, output);
                 }                
                 scale_image(gray_image.nr(), gray_image.nc(), rgb_image);
-                gaussian_blur(rgb_image, blur_image, 0.7);                
-                assign_image(lab_image, blur_image);
+                if (blur_channels) {
+                    gaussian_blur(rgb_image, blur_image, 0.8);
+                    assign_image(lab_image, blur_image);
+                } else {
+                    assign_image(lab_image, rgb_image);
+                }
                 for (long r = 0; r < lab_image.nr(); ++r)
                     for (long c = 0; c < lab_image.nc(); ++c)
                         lab_image(r, c).l = gray_image(r, c);
                 assign_image(rgb_image, lab_image);
+                if (boost_colors) {
+                    const float saturation_boost = 0.15f;
+                    matrix<hsi_pixel> hsi_image;
+                    assign_image(hsi_image, rgb_image);
+                    for (long r = 0; r < hsi_image.nr(); ++r) {
+                        for (long c = 0; c < hsi_image.nc(); ++c) {
+                            hsi_image(r, c).s = __min(255, std::round(static_cast<float>(hsi_image(r, c).s) * (1 + saturation_boost)));
+                        }
+                    }
+                    assign_image(rgb_image, hsi_image);
+                }
             }
             // ---
             if (is_grayscale_image) {
