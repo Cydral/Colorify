@@ -48,20 +48,20 @@ template <int N, typename SUBNET> using res_down = dlib::relu<residual_down<bloc
 template <int N, typename SUBNET> using res_up = dlib::relu<residual_up<block, N, dlib::bn_con, SUBNET>>;
 
 // ----------------------------------------------------------------------------------------
-template <typename SUBNET> using res64 = res<64, SUBNET>;
+template <typename SUBNET> using res64  = res<64, SUBNET>;
 template <typename SUBNET> using res128 = res<128, SUBNET>;
 template <typename SUBNET> using res256 = res<256, SUBNET>;
 template <typename SUBNET> using res512 = res<512, SUBNET>;
 
-template <typename SUBNET> using level1 = dlib::repeat<2, res64, res<64, SUBNET>>;
-template <typename SUBNET> using level2 = dlib::repeat<2, res128, res_down<128, SUBNET>>;
-template <typename SUBNET> using level3 = dlib::repeat<2, res256, res_down<256, SUBNET>>;
-template <typename SUBNET> using level4 = dlib::repeat<2, res512, res_down<512, SUBNET>>;
+template <typename SUBNET> using level1 = dlib::repeat<3, res64, res<64, SUBNET>>;
+template <typename SUBNET> using level2 = dlib::repeat<4, res128, res_down<128, SUBNET>>;
+template <typename SUBNET> using level3 = dlib::repeat<6, res256, res_down<256, SUBNET>>;
+template <typename SUBNET> using level4 = dlib::repeat<3, res512, res_down<512, SUBNET>>;
 
-template <typename SUBNET> using level1t = dlib::repeat<2, res64, res_up<64, SUBNET>>;
-template <typename SUBNET> using level2t = dlib::repeat<2, res128, res_up<128, SUBNET>>;
-template <typename SUBNET> using level3t = dlib::repeat<2, res256, res_up<256, SUBNET>>;
-template <typename SUBNET> using level4t = dlib::repeat<2, res512, res_up<512, SUBNET>>;
+template <typename SUBNET> using level1t = dlib::repeat<3, res64, res_up<64, SUBNET>>;
+template <typename SUBNET> using level2t = dlib::repeat<4, res128, res_up<128, SUBNET>>;
+template <typename SUBNET> using level3t = dlib::repeat<6, res256, res_up<256, SUBNET>>;
+template <typename SUBNET> using level4t = dlib::repeat<3, res512, res_up<512, SUBNET>>;
 
 // ----------------------------------------------------------------------------------------
 template <
@@ -90,7 +90,7 @@ template <typename SUBNET> using concat_utag4 = resize_and_concat<utag4, utag4_,
 
 // ----------------------------------------------------------------------------------------
 template <typename SUBNET> using generator_backbone =
-    relu<bn_con<cont<64, 7, 7, 2, 2,
+relu<bn_con<cont<64, 7, 7, 2, 2,
     concat_utag1<level1t<
     concat_utag2<level2t<
     concat_utag3<level3t<
@@ -98,8 +98,8 @@ template <typename SUBNET> using generator_backbone =
     level4<utag4<
     level3<utag3<
     level2<utag2<
-    level1<max_pool<3, 3, 2, 2, utag1<
-    relu<bn_con<con<64, 7, 7, 2, 2, SUBNET>>>>>>>>>>>>>>>>>>>>>>>;
+    level1<
+    max_pool<3, 3, 2, 2, utag1<relu<bn_con<con<64, 7, 7, 2, 2, SUBNET>>>>>>>>>>>>>>>>>>>>>>>;
 
 // ----------------------------------------------------------------------------------------
 // RGB to grayscale image conversion
@@ -142,7 +142,7 @@ inline uint16_t quantize_n_bits(float value, int n) {
 inline float dequantize_n_bits(uint16_t quantized_value, int n) {
     // Ensure n is within a valid range
     if (n <= 0 || n > 16) throw std::invalid_argument("Invalid number of bits for dequantization");    
-    float max_value = (1 << n) - 1; // Calculate the maximum value for n bits    
+    const float max_value = (1 << n) - 1; // Calculate the maximum value for n bits    
     return (static_cast<float>(quantized_value) * 255.0f / max_value); // Dequantize the value
 }
 
