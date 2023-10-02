@@ -203,7 +203,7 @@ try {
                     assign_image(hsi_image, rgb_image);
                     for (long r = 0; r < hsi_image.nr(); ++r) {
                         for (long c = 0; c < hsi_image.nc(); ++c) {
-                            hsi_image(r, c).s *= __min(255, std::round(static_cast<float>(hsi_image(r, c).s) * (1 + saturation_boost)));
+                            hsi_image(r, c).s = __min(255, std::round(static_cast<float>(hsi_image(r, c).s) * (1 + saturation_boost)));
                         }
                     }
                     assign_image(rgb_image, hsi_image);
