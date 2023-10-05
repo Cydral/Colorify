@@ -185,7 +185,7 @@ void normalize_images(const std::string& rootDir) {
             size_t prev_nc = input_image.nc(), prev_nr = input_image.nr();
             resize_max(input_image, 1024);
             if (input_image.nc() != prev_nc && input_image.nr() != prev_nr) {
-                save_jpeg(input_image, file.full_name(), 90);
+                save_jpeg(input_image, file.full_name(), 95);
                 std::cout << "Normalized: " << file.full_name() << endl; // Resize two large images
             }            
         } catch (...) {
@@ -210,7 +210,21 @@ void norm_output_images(std::vector<std::array<matrix<float>, 2>>& output_images
         }
     }
 }
-
+// ----------------------------------------------------------------------------------------
+bool is_directory(const std::string& path) {
+    struct stat s;
+    if (stat(path.c_str(), &s) == 0) {
+        if (s.st_mode & S_IFDIR) {
+            return true;
+        }
+    }
+    return false;
+}
+void parse_directory(const std::string& path, std::vector<std::string>& files) {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
+        if (entry.is_regular_file()) files.push_back(entry.path().string());
+    }
+}
 
 int main(int argc, char** argv) try {
     bool import_backbone = false, blur_channels = false, boost_colors = false;
@@ -220,10 +234,12 @@ int main(int argc, char** argv) try {
         ("classification", po::value<string>(), "train classification model <dir>")
         ("regression", po::value<string>(), "train regression model <dir>")
         ("regression-gan", po::value<string>(), "train regression model <dir>")
-        ("classification-test", po::value<string>(), "test classification model <dir>")
-        ("regression-test", po::value<string>(), "test regression model <dir>")
+        ("classification-test", po::value<string>(), "test classification model <dir or file>")
+        ("regression-test", po::value<string>(), "test regression model <dir or file>")
         ("export-backbone", po::value<string>(), "export backbone from a model <model name>")
         ("import-backbone", po::bool_switch(&import_backbone)->default_value(false), "import backbone to initiate a model")
+        ("low-bulk-convert", po::value<string>(), "convert multiple images at the same time <dir> (low resolution model)")
+        ("high-bulk-convert", po::value<string>(), "convert multiple images at the same time <dir> (high resolution model)")
         ("blur-channels", po::bool_switch(&blur_channels)->default_value(false), "apply slight blur to the color channels")
         ("boost-colors", po::bool_switch(&boost_colors)->default_value(false), "enhance the vibrancy of colors")
         ("help", "this help message");
@@ -275,7 +291,7 @@ int main(int argc, char** argv) try {
         state.last_run_time = state.first_run_time;
 
         // Instantiate the model        
-        const size_t minibatch_size = 16;
+        const size_t minibatch_size = 10; // To be able to run the program on 8GB card
         dlib::rand rnd(time(nullptr));
         set_dnn_prefer_fastest_algorithms();
         const string model_name = classification_training ? "lowres_colorify.dnn" : "highres_colorify.dnn";
@@ -301,7 +317,7 @@ int main(int argc, char** argv) try {
             }
         }        
 
-        const double learning_rate = (training_images.size() < 3000) ? 1e-1 : 1e-1;
+        const double learning_rate = 1e-1;
         const double min_learning_rate = 1e-5;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
@@ -421,8 +437,8 @@ int main(int argc, char** argv) try {
                     }
                 }
                 image_to_save = tile_images(disp_imgs);
-                if (classification_training) save_jpeg(image_to_save, "lowres_model_training.jpg", 90);
-                else save_jpeg(image_to_save, "highres_model_training.jpg", 90);
+                if (classification_training) save_jpeg(image_to_save, "lowres_model_training.jpg", 95);
+                else save_jpeg(image_to_save, "highres_model_training.jpg", 95);
                 win.set_image(image_to_save);
                 win.set_title("COLORIFY - Supervised-learning process, step#: " + to_string(iteration) + " - " + to_string(max_iter) + " samples - Original | Grayscale | Colorized");
             }
@@ -656,7 +672,12 @@ int main(int argc, char** argv) try {
     } else if (vm.count("classification-test") || vm.count("regression-test")) {
         bool use_lr_model = vm.count("classification-test");
         const string input_dir = use_lr_model ? vm["classification-test"].as<string>() : vm["regression-test"].as<string>();
-        const std::vector<file> images = dlib::get_files_in_directory_tree(input_dir, dlib::match_endings(".jpeg .jpg .png"));
+        std::vector<string> images;
+        if (!is_directory(input_dir)) {
+            images.push_back(input_dir);
+        } else {
+            parse_directory(input_dir, images);
+        }
         std::cout << "total images to colorify: " << images.size() << endl;
         if (images.size() == 0) {
             std::cout << "Didn't find images to colorify" << endl;
@@ -664,7 +685,6 @@ int main(int argc, char** argv) try {
         }
 
         // Load the mode
-        dlib::rand rnd(time(nullptr));
         const string model_name = use_lr_model ? "lowres_colorify.dnn" : "highres_colorify.dnn";
         net_type_lr net_lr;
         net_type_hr net_hr;
@@ -687,17 +707,17 @@ int main(int argc, char** argv) try {
         matrix<gray_pixel> gray_image, temp_gray_image;
         matrix<lab_pixel> lab_image;
         for (auto& i : images) {            
-            try { load_image(input_image, i.full_name()); }
+            try { load_image(input_image, i); }
             catch (...) {
-                cerr << "Error during image loading: " << i.full_name() << endl;
+                cerr << "Error during image loading: " << i << endl;
                 continue;
             }
             if (is_two_small(input_image)) continue;
             const bool is_grayscale_image = is_grayscale(input_image);
-            resize_max(input_image, std_image_size * 2);
+            resize_max(input_image, std_image_size * 3);
             rgb_image_to_grayscale_image(input_image, gray_image);
             assign_image(display_gray_image, gray_image);         
-            // ---
+            // --- Core process for colorization
             {
                 assign_image(temp_gray_image, gray_image);
                 resize_inplace(temp_gray_image, std_image_size);
@@ -739,10 +759,96 @@ int main(int argc, char** argv) try {
                 win.set_title("COLORIFY - Original " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Grayscale | Generated (" + to_string(rgb_image.nc()) + "x" + to_string(rgb_image.nr()) + ")");
                 win.set_image(join_rows(input_image, join_rows(display_gray_image, rgb_image)));
             }
-            std::cout << i.full_name() << " - Hit enter to process the next image or 'q' to quit";
+            std::cout << i << " - Hit enter to process the next image or 'q' to quit";
             char c = std::cin.get();
             if (c == 'q' || c == 'Q') break;
         }
+    } else if (vm.count("low-bulk-convert") || vm.count("high-bulk-convert")) {
+        bool use_lr_model = vm.count("low-bulk-convert");
+        const string input_dir = use_lr_model ? vm["low-bulk-convert"].as<string>() : vm["high-bulk-convert"].as<string>();
+        if (!is_directory(input_dir)) {
+            std::cout << "<" << input_dir << "> isn't a directory" << endl;
+            return EXIT_FAILURE;
+        }
+        const std::vector<file> images = dlib::get_files_in_directory_tree(input_dir, dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
+        if (images.size() == 0) {
+            std::cout << "Didn't find images for the bulk colorization process" << endl;
+            return EXIT_FAILURE;
+        }
+        std::cout << "total images to colorify: " << images.size() << endl;
+        
+        // Load the mode
+        const string model_name = use_lr_model ? "lowres_colorify.dnn" : "highres_colorify.dnn";
+        net_type_lr net_lr;
+        net_type_hr net_hr;
+        if (use_lr_model) {
+            if (file_exists(model_name)) deserialize(model_name) >> net_lr;
+            else {
+                std::cout << "Didn't find the precomputed model: " << model_name << endl;
+                return EXIT_FAILURE;
+            }
+        } else {
+            if (file_exists(model_name)) deserialize(model_name) >> net_hr;
+            else {
+                std::cout << "Didn't find the precomputed model: " << model_name << endl;
+                return EXIT_FAILURE;
+            }
+        }
+        matrix<rgb_pixel> input_image, rgb_image, blur_image;
+        matrix<gray_pixel> gray_image, temp_gray_image;
+        matrix<lab_pixel> lab_image;
+        size_t count = 0;
+        std::cout << "please wait, bulk conversion in progress... [" << count  << "/" << images.size() << "]\r";
+        for (auto& i : images) {
+            try { load_image(input_image, i.full_name()); }
+            catch (...) {
+                cerr << "Error during image loading: " << i << endl;
+                continue;
+            }
+            rgb_image_to_grayscale_image(input_image, gray_image);
+            // --- Core process for colorization
+            {
+                assign_image(temp_gray_image, gray_image);
+                resize_inplace(temp_gray_image, std_image_size);
+                if (use_lr_model) {
+                    matrix<uint16_t> output = net_lr(temp_gray_image);
+                    rgb_image = concat_channels(temp_gray_image, output);
+                } else {
+                    std::array<matrix<float>, 2> output = net_hr(temp_gray_image);
+                    rgb_image = concat_channels(temp_gray_image, output);
+                }
+                scale_image(gray_image.nr(), gray_image.nc(), rgb_image);
+                if (blur_channels) {
+                    gaussian_blur(rgb_image, blur_image, 0.8);
+                    assign_image(lab_image, blur_image);
+                } else {
+                    assign_image(lab_image, rgb_image);
+                }
+                for (long r = 0; r < lab_image.nr(); ++r)
+                    for (long c = 0; c < lab_image.nc(); ++c)
+                        lab_image(r, c).l = gray_image(r, c);
+                assign_image(rgb_image, lab_image);
+                if (boost_colors) {
+                    const float saturation_boost = 0.15f;
+                    matrix<hsi_pixel> hsi_image;
+                    assign_image(hsi_image, rgb_image);
+                    for (long r = 0; r < hsi_image.nr(); ++r) {
+                        for (long c = 0; c < hsi_image.nc(); ++c) {
+                            hsi_image(r, c).s = __min(255, std::round(static_cast<float>(hsi_image(r, c).s) * (1 + saturation_boost)));
+                        }
+                    }
+                    assign_image(rgb_image, hsi_image);
+                }
+            }
+            // ---
+            const string suffix = "_colorized";
+            fs::path filePath(i.full_name()), stem = filePath.stem(), extension = filePath.extension();
+            fs::path output_finalement = (filePath.parent_path() / stem).string() + suffix + extension.string();
+            save_jpeg(rgb_image, output_finalement.string(), 95);
+            std::cout << "please wait, bulk conversion in progress... [" << ++count << "/" << images.size() << "]\r";
+            if (g_interrupted) break;
+        }
+        std::cout << "please wait, bulk conversion in progress... [" << images.size() << "/" << images.size() << "]\ndone" << endl;
     }
 }
 catch (std::exception& e)
