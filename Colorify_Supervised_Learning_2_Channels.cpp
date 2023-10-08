@@ -17,12 +17,14 @@ using net_type_lr = loss_multiclass_log_per_pixel_weighted<cont<256, 1, 1, 1, 1,
 using net_type_hr = loss_mean_squared_per_channel_and_pixel<2, cont<2, 1, 1, 1, 1, net_backbone>>;
 
 // [D] network type
-using net_discriminator = loss_binary_log<fc_no_bias<1, conp<2, 3, 1, 0, leaky_relu<bn_con<conp<256, 4, 2, 1, leaky_relu<bn_con<conp<128, 4, 2, 1, leaky_relu<conp<64, 4, 2, 1, input<std::array<matrix<float>, 2>>>>>>>>>>>>>;
+using net_discriminator = loss_binary_log<fc<1, conp<2, 3, 1, 0, dropout<leaky_relu<bn_con<conp<256, 4, 2, 1, dropout<leaky_relu<bn_con<conp<128, 4, 2, 1, leaky_relu<conp<64, 4, 2, 1, input<std::array<matrix<float>, 2>>>>>>>>>>>>>>>;
 
 // ----------------------------------------------------------------------------------------
+const uint8_t lr_res_nb_bits = 4;
 const uint8_t hr_res_nb_bits = 5;
 const bool do_color_reduction = false;
-const float max_hr_output_value = (1 << hr_res_nb_bits);
+const uint16_t max_lr_output_value = (1 << (lr_res_nb_bits * 2)) - 1;
+const float max_hr_output_value = (1 << hr_res_nb_bits) - 1;
 const float avg_hr_output_value = max_hr_output_value / 2.0f;
 struct training_sample {
     matrix<gray_pixel> input_image;
@@ -45,11 +47,19 @@ matrix<rgb_pixel> concat_channels(const matrix<gray_pixel>& gray_image, const Ab
         for (long c = 0; c < lab_image.nc(); ++c) {
             lab_image(r, c).l = gray_image(r, c);
             if constexpr (std::is_same<AbImageType, matrix<uint16_t>>::value) {
-                lab_image(r, c).a = static_cast<uint8_t>(dequantize_n_bits(ab_image(r, c) >> 4, 4));
-                lab_image(r, c).b = static_cast<uint8_t>(dequantize_n_bits(ab_image(r, c) & 0xF, 4));
+                if (ab_image(r, c) > max_lr_output_value) {
+                    lab_image(r, c).a = lab_image(r, c).b = (1 << lr_res_nb_bits) - 1;
+                } else {
+                    lab_image(r, c).a = static_cast<uint8_t>(dequantize_n_bits(ab_image(r, c) >> 4, lr_res_nb_bits));
+                    lab_image(r, c).b = static_cast<uint8_t>(dequantize_n_bits(ab_image(r, c) & 0xF, lr_res_nb_bits));
+                }
             } else if constexpr (std::is_same<AbImageType, std::array<matrix<float>, 2>>::value) {
-                lab_image(r, c).a = static_cast<uint8_t>(dequantize_n_bits(std::round(ab_image[0](r, c)), hr_res_nb_bits));
-                lab_image(r, c).b = static_cast<uint8_t>(dequantize_n_bits(std::round(ab_image[1](r, c)), hr_res_nb_bits));
+                if (ab_image[0](r, c) < 0.0f) lab_image(r, c).a = 0;
+                else if (ab_image[0](r, c) > max_hr_output_value) lab_image(r, c).a = static_cast<uint8_t>(max_hr_output_value);
+                else lab_image(r, c).a = static_cast<uint8_t>(dequantize_n_bits(std::round(ab_image[0](r, c)), hr_res_nb_bits));
+                if (ab_image[1](r, c) < 0.0f) lab_image(r, c).b = 0;
+                else if (ab_image[1](r, c) > max_hr_output_value) lab_image(r, c).b = static_cast<uint8_t>(max_hr_output_value);                
+                else lab_image(r, c).b = static_cast<uint8_t>(dequantize_n_bits(std::round(ab_image[1](r, c)), hr_res_nb_bits));
             }
         }
     }
@@ -117,10 +127,10 @@ void randomly_crop_image(const matrix<rgb_pixel>& input_image, training_sample& 
         crop.lr_output_image.set_size(lab_image.nr(), lab_image.nc());
         for (long r = 0; r < lab_image.nr(); ++r) {
             for (long c = 0; c < lab_image.nc(); ++c) {
-                uint16_t quantized_a = quantize_n_bits(lab_image(r, c).a, 4);
-                uint16_t quantized_b = quantize_n_bits(lab_image(r, c).b, 4);
-                uint16_t label = (quantized_a << 4) | quantized_b;
-                float weight = calc_weight(quantized_a, quantized_b, 4, lab_image(r, c).a, lab_image(r, c).b, lab_image(r, c).l / 255.0f);
+                uint16_t quantized_a = quantize_n_bits(lab_image(r, c).a, lr_res_nb_bits);
+                uint16_t quantized_b = quantize_n_bits(lab_image(r, c).b, lr_res_nb_bits);
+                uint16_t label = (quantized_a << lr_res_nb_bits) | quantized_b;
+                float weight = calc_weight(quantized_a, quantized_b, lr_res_nb_bits, lab_image(r, c).a, lab_image(r, c).b, lab_image(r, c).l / 255.0f);
                 crop.lr_output_image(r, c) = label;
                 crop.weighted_output_image(r, c) = weighted_label(label, weight);
             }
@@ -203,10 +213,26 @@ void normalize_images(const std::string& rootDir) {
 }
 
 // ----------------------------------------------------------------------------------------
+std::vector<std::array<matrix<float>, 2>> get_generated_images(const tensor& out) {
+    std::vector<std::array<matrix<float>, 2>> images;
+    for (long n = 0; n < out.num_samples(); ++n) {
+        std::array<matrix<float>, 2> output_image;
+        output_image[0] = image_plane(out, n, 0);
+        output_image[1] = image_plane(out, n, 1);
+        images.push_back(output_image);
+    }
+    return images;
+}
 void norm_output_images(std::vector<std::array<matrix<float>, 2>>& output_images) {
     for (auto& output_image : output_images) {
-        for (int c = 0; c < 2; ++c) {
-            output_image[c] = (output_image[c] - avg_hr_output_value) / max_hr_output_value;
+        for (int k = 0; k < 2; ++k) {
+            for (long r = 0; r < output_image[k].nr(); ++r) {
+                for (long c = 0; c < output_image[k].nc(); ++c) {
+                    if (output_image[k](r,c) < 0) output_image[k](r, c) = (0.0f - avg_hr_output_value) / max_hr_output_value;
+                    else if (output_image[k](r, c) > max_hr_output_value) output_image[k](r, c) = (max_hr_output_value - avg_hr_output_value) / max_hr_output_value;
+                    else output_image[k](r, c) = (output_image[k](r, c) - avg_hr_output_value) / max_hr_output_value;
+                }
+            }
         }
     }
 }
@@ -227,7 +253,10 @@ void parse_directory(const std::string& path, std::vector<std::string>& files) {
 }
 
 int main(int argc, char** argv) try {
+    const long update_display = 30;
+    const long max_minutes_elapsed = 8;
     bool import_backbone = false, blur_channels = false, boost_colors = false;
+    size_t minibatch_size = 20, patience = 10000;
     po::options_description desc("Program options");
     desc.add_options()
         ("normalization", po::value<string>(), "normalize images <dir>")
@@ -238,6 +267,8 @@ int main(int argc, char** argv) try {
         ("regression-test", po::value<string>(), "test regression model <dir or file>")
         ("export-backbone", po::value<string>(), "export backbone from a model <model name>")
         ("import-backbone", po::bool_switch(&import_backbone)->default_value(false), "import backbone to initiate a model")
+        ("minibatch-size", po::value<size_t>(&minibatch_size)->default_value(20), "set the minibatch size (default 20)")
+        ("patience", po::value<size_t>(&patience)->default_value(5000), "set the patience parameter (default 10000)")
         ("low-bulk-convert", po::value<string>(), "convert multiple images at the same time <dir> (low resolution model)")
         ("high-bulk-convert", po::value<string>(), "convert multiple images at the same time <dir> (high resolution model)")
         ("blur-channels", po::bool_switch(&blur_channels)->default_value(false), "apply slight blur to the color channels")
@@ -256,6 +287,7 @@ int main(int argc, char** argv) try {
     dlib::rand rnd(std::rand());
     size_t iteration = 0;    
     SetConsoleCtrlHandler(CtrlHandler, TRUE);
+    set_dnn_prefer_smallest_algorithms();
 
     if (vm.count("normalization")) {
         normalize_images(vm["normalization"].as<string>());
@@ -291,9 +323,6 @@ int main(int argc, char** argv) try {
         state.last_run_time = state.first_run_time;
 
         // Instantiate the model        
-        const size_t minibatch_size = 10; // To be able to run the program on 8GB card
-        dlib::rand rnd(time(nullptr));
-        set_dnn_prefer_fastest_algorithms();
         const string model_name = classification_training ? "lowres_colorify.dnn" : "highres_colorify.dnn";
         net_type_lr net_lr;
         net_type_hr net_hr;
@@ -318,12 +347,9 @@ int main(int argc, char** argv) try {
         }        
 
         const double learning_rate = 1e-1;
-        const double min_learning_rate = 1e-5;
+        const double min_learning_rate = 1e-6;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
-        const long patience = (training_images.size() < 3000) ? 10000 : 30000;
-        const long update_display = 50;
-        const long max_minutes_elapsed = 5;
 
         // Initialize the trainer
         dnn_trainer<net_type_lr> trainer_lr(net_lr, sgd(weight_decay, momentum));
@@ -395,7 +421,7 @@ int main(int argc, char** argv) try {
         std::vector<std::array<matrix<float>, 2>> hr_labels;
         std::vector<matrix<gray_pixel>> samples;
         dlib::image_window win;
-        while (!g_interrupted && cur_learning_rate > min_learning_rate) {
+        while (!g_interrupted && cur_learning_rate >= min_learning_rate) {
             // Train
             lr_labels.clear();
             weighted_labels.clear();
@@ -491,11 +517,6 @@ int main(int argc, char** argv) try {
         state.last_run_time = state.first_run_time;
 
         // Instantiate the model        
-        const size_t minibatch_size = 30;
-        const long update_display = 50;
-        const long max_minutes_elapsed = 5;
-        dlib::rand rnd(time(nullptr));
-        set_dnn_prefer_fastest_algorithms();
         const string model_name = "highres_colorify.dnn";
         net_type_hr net_hr;
         net_discriminator net_d;
@@ -503,8 +524,10 @@ int main(int argc, char** argv) try {
         disable_duplicative_biases(net_d);
 
         // The solvers for the generator and discriminator networks
-        std::vector<adam> g_solvers(net_hr.num_computational_layers, adam(0, 0.5, 0.999));
-        std::vector<adam> d_solvers(net_d.num_computational_layers, adam(0, 0.5, 0.999));
+        const double weight_decay = 1e-4;
+        const double momentum_1 = 0.5, momentum_2 = 0.999;
+        std::vector<adam> g_solvers(net_hr.num_computational_layers, adam(weight_decay, momentum_1, momentum_2));
+        std::vector<adam> d_solvers(net_d.num_computational_layers, adam(weight_decay, momentum_1, momentum_2));
         double learning_rate = 2e-4;
 
         // Resume training from last sync file (only for the generator)
@@ -572,7 +595,7 @@ int main(int argc, char** argv) try {
             }            
 
             // Train the discriminator with real images
-            norm_output_images(output_samples);
+            //norm_output_images(output_samples);
             net_d.to_tensor(output_samples.begin(), output_samples.end(), real_samples_tensor);
             net_d.forward(real_samples_tensor);
             d_loss.add(net_d.compute_loss(real_samples_tensor, real_labels.begin()));
@@ -582,8 +605,8 @@ int main(int argc, char** argv) try {
             // Train the discriminator with fake images
             net_hr.to_tensor(gray_samples.begin(), gray_samples.end(), grays_tensor);
             net_hr.forward(grays_tensor);
-            auto gen_samples = net_hr(gray_samples);
-            norm_output_images(gen_samples);
+            auto gen_samples = get_generated_images(layer<1>(net_hr).get_output());
+            //norm_output_images(gen_samples);
             net_d.to_tensor(gen_samples.begin(), gen_samples.end(), gen_samples_tensor);
             net_d.forward(gen_samples_tensor);
             d_loss.add(net_d.compute_loss(gen_samples_tensor, gen_labels.begin()));
@@ -626,10 +649,10 @@ int main(int argc, char** argv) try {
                 matrix<rgb_pixel> rgb_src, rgb_gen, gray_img;
                 size_t pos_i = 0, max_iter = __min(gen_samples.size(), 4);
                 for (auto& image : gen_samples) {
-                    for (int c = 0; c < 2; ++c) {
+                    /*for (int c = 0; c < 2; ++c) {
                         output_samples[pos_i][c] = (output_samples[pos_i][c] * max_hr_output_value) + avg_hr_output_value;
                         gen_samples[pos_i][c] = (gen_samples[pos_i][c] * max_hr_output_value) + avg_hr_output_value;
-                    }
+                    }*/
                     assign_image(gray_img, gray_samples[pos_i]);
                     rgb_src = concat_channels(gray_samples[pos_i], output_samples[pos_i]);
                     rgb_gen = concat_channels(gray_samples[pos_i], gen_samples[pos_i]);
@@ -714,7 +737,7 @@ int main(int argc, char** argv) try {
             }
             if (is_two_small(input_image)) continue;
             const bool is_grayscale_image = is_grayscale(input_image);
-            resize_max(input_image, std_image_size * 3);
+            resize_max(input_image, std_image_size * 1.5);
             rgb_image_to_grayscale_image(input_image, gray_image);
             assign_image(display_gray_image, gray_image);         
             // --- Core process for colorization
@@ -740,7 +763,7 @@ int main(int argc, char** argv) try {
                         lab_image(r, c).l = gray_image(r, c);
                 assign_image(rgb_image, lab_image);
                 if (boost_colors) {
-                    const float saturation_boost = 0.15f;
+                    const float saturation_boost = 0.17f;
                     matrix<hsi_pixel> hsi_image;
                     assign_image(hsi_image, rgb_image);
                     for (long r = 0; r < hsi_image.nr(); ++r) {
@@ -829,7 +852,7 @@ int main(int argc, char** argv) try {
                         lab_image(r, c).l = gray_image(r, c);
                 assign_image(rgb_image, lab_image);
                 if (boost_colors) {
-                    const float saturation_boost = 0.15f;
+                    const float saturation_boost = 0.17f;
                     matrix<hsi_pixel> hsi_image;
                     assign_image(hsi_image, rgb_image);
                     for (long r = 0; r < hsi_image.nr(); ++r) {
