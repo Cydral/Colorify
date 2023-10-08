@@ -53,14 +53,14 @@ template <typename SUBNET> using res128 = res<128, SUBNET>;
 template <typename SUBNET> using res256 = res<256, SUBNET>;
 template <typename SUBNET> using res512 = res<512, SUBNET>;
 
-template <typename SUBNET> using level1 = dlib::repeat<3, res64, res<64, SUBNET>>;
-template <typename SUBNET> using level2 = dlib::repeat<4, res128, res_down<128, SUBNET>>;
-template <typename SUBNET> using level3 = dlib::repeat<6, res256, res_down<256, SUBNET>>;
+template <typename SUBNET> using level1 = dlib::repeat<2, res64, res<64, SUBNET>>;
+template <typename SUBNET> using level2 = dlib::repeat<2, res128, res_down<128, SUBNET>>;
+template <typename SUBNET> using level3 = dlib::repeat<5, res256, res_down<256, SUBNET>>;
 template <typename SUBNET> using level4 = dlib::repeat<3, res512, res_down<512, SUBNET>>;
 
-template <typename SUBNET> using level1t = dlib::repeat<3, res64, res_up<64, SUBNET>>;
-template <typename SUBNET> using level2t = dlib::repeat<4, res128, res_up<128, SUBNET>>;
-template <typename SUBNET> using level3t = dlib::repeat<6, res256, res_up<256, SUBNET>>;
+template <typename SUBNET> using level1t = dlib::repeat<2, res64, res_up<64, SUBNET>>;
+template <typename SUBNET> using level2t = dlib::repeat<2, res128, res_up<128, SUBNET>>;
+template <typename SUBNET> using level3t = dlib::repeat<5, res256, res_up<256, SUBNET>>;
 template <typename SUBNET> using level4t = dlib::repeat<3, res512, res_up<512, SUBNET>>;
 
 // ----------------------------------------------------------------------------------------
@@ -131,14 +131,14 @@ void reduce_colors(matrix<rgb_pixel>& rgb_image) {
     rgb565_image_to_rgb_image(rgb565_image, rgb_image);
 }
 
-// Function to quantize a value to n bits (0 to 2^n-1)
+// Function to quantize a value to n bits (0 to 2^n-1) to a int_16
 inline uint16_t quantize_n_bits(float value, int n) {
     // Ensure n is within a valid range
     if (n <= 0 || n > 16) throw std::invalid_argument("Invalid number of bits for quantization");    
     float max_value = (1 << n) - 1; // Calculate the maximum value for n bits    
     return static_cast<uint16_t>(std::round(value * max_value / 255.0f)); // Quantize the value
 }
-// Function to dequantize a value from n bits (0 to 2^n-1) to a double
+// Function to dequantize a value from n bits (0 to 2^n-1) to a float
 inline float dequantize_n_bits(uint16_t quantized_value, int n) {
     // Ensure n is within a valid range
     if (n <= 0 || n > 16) throw std::invalid_argument("Invalid number of bits for dequantization");    
