@@ -268,7 +268,7 @@ int main(int argc, char** argv) try {
         ("export-backbone", po::value<string>(), "export backbone from a model <model name>")
         ("import-backbone", po::bool_switch(&import_backbone)->default_value(false), "import backbone to initiate a model")
         ("minibatch-size", po::value<size_t>(&minibatch_size)->default_value(20), "set the minibatch size (default 20)")
-        ("patience", po::value<size_t>(&patience)->default_value(5000), "set the patience parameter (default 10000)")
+        ("patience", po::value<size_t>(&patience)->default_value(10000), "set the patience parameter (default 10000)")
         ("low-bulk-convert", po::value<string>(), "convert multiple images at the same time <dir> (low resolution model)")
         ("high-bulk-convert", po::value<string>(), "convert multiple images at the same time <dir> (high resolution model)")
         ("blur-channels", po::bool_switch(&blur_channels)->default_value(false), "apply slight blur to the color channels")
