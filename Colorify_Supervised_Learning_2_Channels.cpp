@@ -346,8 +346,8 @@ int main(int argc, char** argv) try {
             }
         }        
 
-        const double learning_rate = 1e-1;
-        const double min_learning_rate = 1e-6;
+        const double learning_rate = 1e-2;
+        const double min_learning_rate = 1e-5;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
 
