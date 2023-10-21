@@ -98,26 +98,31 @@ void resize_max(matrix<pixel_type>& in, size_t max_image_dims) {
 }
 
 // ----------------------------------------------------------------------------------------
-rectangle make_random_cropping_rect(const matrix<rgb_pixel>& img, dlib::rand& rnd) {
-    // figure out what rectangle we want to crop from the image
-    double mins = 0.85, maxs = 1.0;
-    auto scale = mins + rnd.get_random_double() * (maxs - mins);
-    auto size = scale * std::min(img.nr(), img.nc());
-    rectangle rect(size, size);
-    // randomly shift the box around
-    point offset(rnd.get_random_32bit_number() % (img.nc() - rect.width()), rnd.get_random_32bit_number() % (img.nr() - rect.height()));
-    return move_rect(rect, offset);
+rectangle make_random_cropping_rect(const matrix<rgb_pixel>& img, dlib::rand& rnd, const bool do_augmentation) {    
+    if (do_augmentation) {
+        // figure out what rectangle we want to crop from the image
+        double mins = 0.85, maxs = 1.0;
+        auto scale = mins + rnd.get_random_double() * (maxs - mins);
+        auto size = scale * std::min(img.nr(), img.nc());
+        rectangle rect(size, size);
+        // randomly shift the box around
+        point offset(rnd.get_random_32bit_number() % (img.nc() - rect.width()), rnd.get_random_32bit_number() % (img.nr() - rect.height()));
+        return move_rect(rect, offset);
+    } else {
+        auto size = std::min(img.nr(), img.nc());
+        return rectangle(size, size);
+    }
 }
 
 // ----------------------------------------------------------------------------------------
-void randomly_crop_image(const matrix<rgb_pixel>& input_image, training_sample& crop, dlib::rand& rnd, const bool low_res) {
-    const auto rect = make_random_cropping_rect(input_image, rnd);
+void randomly_crop_image(const matrix<rgb_pixel>& input_image, training_sample& crop, dlib::rand& rnd, const bool low_res, const bool do_augmentation = false) {
+    const auto rect = make_random_cropping_rect(input_image, rnd, do_augmentation);
     const chip_details chip_details(rect, chip_dims(std_image_size, std_image_size));
 
     matrix<rgb_pixel> src_image;
     extract_image_chip(input_image, chip_details, src_image, interpolate_bilinear());
     if (do_color_reduction) reduce_colors(src_image);
-    if (rnd.get_random_double() > 0.5) src_image = fliplr(src_image);
+    if (do_augmentation && rnd.get_random_double() > 0.5) src_image = fliplr(src_image);
 
     rgb_image_to_grayscale_image(src_image, crop.input_image);
     matrix<lab_pixel> lab_image;
@@ -189,14 +194,14 @@ void normalize_images(const std::string& rootDir) {
             matrix<rgb_pixel> input_image;
             load_image(input_image, file.full_name());            
             if (is_grayscale(input_image) || is_two_small(input_image)) {
-                std::cout << "Too small or grayscale image, deleting: " << file.full_name() << endl;
+                cout << "Too small or grayscale image, deleting: " << file.full_name() << endl;
                 fs::remove(file.full_name()); // Remove small images
             }
             size_t prev_nc = input_image.nc(), prev_nr = input_image.nr();
             resize_max(input_image, 1024);
             if (input_image.nc() != prev_nc && input_image.nr() != prev_nr) {
                 save_jpeg(input_image, file.full_name(), 95);
-                std::cout << "Normalized: " << file.full_name() << endl; // Resize two large images
+                cout << "Normalized: " << file.full_name() << endl; // Resize two large images
             }            
         } catch (...) {
             cerr << "Error processing file: " << file.full_name() << ", deleting" << endl;
@@ -204,12 +209,12 @@ void normalize_images(const std::string& rootDir) {
         }
         if ((processed_files++ % 100) == 0) {
             long progress_percentage = static_cast<long>((static_cast<float>(processed_files) / total_files * 100));
-            std::cout << "Normalization progress: [" << string(long(progress_percentage / 2), '=') << "] " << progress_percentage << "%" << "\r";
-            std::cout.flush();
+            cout << "Normalization progress: [" << string(long(progress_percentage / 2), '=') << "] " << progress_percentage << "%" << "\r";
+            cout.flush();
         }
         if (g_interrupted) break;
     }
-    std::cout << endl;
+    cout << endl;
 }
 
 // ----------------------------------------------------------------------------------------
@@ -255,7 +260,8 @@ void parse_directory(const std::string& path, std::vector<std::string>& files) {
 int main(int argc, char** argv) try {
     const long update_display = 30;
     const long max_minutes_elapsed = 8;
-    bool import_backbone = false, blur_channels = false, boost_colors = false;
+    bool do_augmentation = false, import_backbone = false, blur_channels = false, boost_colors = false;
+    double initial_learning_rate = 1e-1;
     size_t minibatch_size = 20, patience = 10000;
     po::options_description desc("Program options");
     desc.add_options()
@@ -267,6 +273,8 @@ int main(int argc, char** argv) try {
         ("regression-test", po::value<string>(), "test regression model <dir or file>")
         ("export-backbone", po::value<string>(), "export backbone from a model <model name>")
         ("import-backbone", po::bool_switch(&import_backbone)->default_value(false), "import backbone to initiate a model")
+        ("image-augmentation", po::bool_switch(&do_augmentation)->default_value(false), "do image augmentation during training")
+        ("initial-learning-rate", po::value<double>(&initial_learning_rate)->default_value(1e-1), "set the initial learning rate (default 0.1)")
         ("minibatch-size", po::value<size_t>(&minibatch_size)->default_value(20), "set the minibatch size (default 20)")
         ("patience", po::value<size_t>(&patience)->default_value(10000), "set the patience parameter (default 10000)")
         ("low-bulk-convert", po::value<string>(), "convert multiple images at the same time <dir> (low resolution model)")
@@ -280,7 +288,7 @@ int main(int argc, char** argv) try {
     po::notify(vm);
 
     if (vm.count("help")) {
-        cout << desc << std::endl;
+        cout << desc << endl;
         return EXIT_FAILURE;
     }
     std::srand(std::time(nullptr));
@@ -315,7 +323,7 @@ int main(int argc, char** argv) try {
         const string input_dir = classification_training ? vm["classification"].as<string>() : vm["regression"].as<string>();
         const std::vector<file> training_images = dlib::get_files_in_directory_tree(input_dir, dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
         if (training_images.size() == 0) {
-            std::cout << "Didn't find images for the training dataset" << endl;
+            cout << "Didn't find images for the training dataset" << endl;
             return EXIT_FAILURE;
         }
         current_state state;
@@ -346,14 +354,13 @@ int main(int argc, char** argv) try {
             }
         }        
 
-        const double learning_rate = 1e-2;
         const double min_learning_rate = 1e-5;
         const double weight_decay = 1e-4;
         const double momentum = 0.9;
 
         // Initialize the trainer
         dnn_trainer<net_type_lr> trainer_lr(net_lr, sgd(weight_decay, momentum));
-        trainer_lr.set_learning_rate(learning_rate);
+        trainer_lr.set_learning_rate(initial_learning_rate);
         trainer_lr.set_learning_rate_shrink_factor(0.1);
         trainer_lr.set_mini_batch_size(minibatch_size);
         trainer_lr.set_iterations_without_progress_threshold(patience);
@@ -362,7 +369,7 @@ int main(int argc, char** argv) try {
         set_all_bn_running_stats_window_sizes(net_lr, 1000);
         // --
         dnn_trainer<net_type_hr> trainer_hr(net_hr, sgd(weight_decay, momentum));
-        trainer_hr.set_learning_rate(learning_rate);
+        trainer_hr.set_learning_rate(initial_learning_rate);
         trainer_hr.set_learning_rate_shrink_factor(0.1);
         trainer_hr.set_mini_batch_size(minibatch_size);
         trainer_hr.set_iterations_without_progress_threshold(patience);
@@ -378,24 +385,24 @@ int main(int argc, char** argv) try {
         const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
         matrix<rgb_pixel> input_image;
         load_image(input_image, image_info.full_name());
-        randomly_crop_image(input_image, sample, rnd, classification_training);
+        randomly_crop_image(input_image, sample, rnd, classification_training, do_augmentation);
         if (classification_training) {
             net_lr(sample.input_image);
-            std::cout << net_lr << std::endl;
-            std::cout << "The network has " << net_lr.num_layers << " layers in it" << std::endl;
-            std::cout << std::endl << trainer_lr << std::endl;
+            cout << net_lr << endl;
+            cout << "The network has " << net_lr.num_layers << " layers in it" << std::endl;
+            cout << std::endl << trainer_lr << endl;
         } else {
             net_hr(sample.input_image);
-            std::cout << net_hr << std::endl;
-            std::cout << "The network has " << net_hr.num_layers << " layers in it" << std::endl;
-            std::cout << std::endl << trainer_hr << std::endl;
+            cout << net_hr << std::endl;
+            cout << "The network has " << net_hr.num_layers << " layers in it" << std::endl;
+            cout << std::endl << trainer_hr << endl;
         }        
         // Total images in the dataset
-        std::cout << "images in dataset: " << training_images.size() << endl;
+        cout << "images in dataset: " << training_images.size() << endl;
 
         // Use some threads to preload images
         dlib::pipe<training_sample> data(minibatch_size);
-        auto f = [&data, &training_images, &classification_training](time_t seed) {
+        auto f = [&data, &training_images, &classification_training, &do_augmentation](time_t seed) {
             dlib::rand rnd(time(nullptr) + seed);
             matrix<rgb_pixel> input_image;
             training_sample temp;
@@ -403,7 +410,7 @@ int main(int argc, char** argv) try {
                 const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
                 try { 
                     load_image(input_image, image_info.full_name());
-                    randomly_crop_image(input_image, temp, rnd, classification_training);
+                    randomly_crop_image(input_image, temp, rnd, classification_training, do_augmentation);
                     data.enqueue(temp);
                 } catch (...) {
                     cerr << "Error during image loading: " << image_info.full_name() << endl;
@@ -412,9 +419,10 @@ int main(int argc, char** argv) try {
         };
         std::thread data_loader1([f]() { f(1); });
         std::thread data_loader2([f]() { f(2); });
-        std::cout << "Waiting for the initial pipe loading... ";
+        std::thread data_loader3([f]() { f(3); });
+        cout << "Waiting for the initial pipe loading... ";
         while (data.size() < minibatch_size) std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "done" << std::endl;
+        cout << "done" << endl;
 
         std::vector<matrix<uint16_t>> lr_labels;
         std::vector<matrix<weighted_label_>> weighted_labels;
@@ -493,6 +501,7 @@ int main(int argc, char** argv) try {
         data.disable();
         data_loader1.join();
         data_loader2.join();
+        data_loader3.join();
 
         // Once the training has finished, we don't need the discriminator any more. We just keep the generator
         // We also save the checkpoint again to iterate the learning process
@@ -509,7 +518,7 @@ int main(int argc, char** argv) try {
         const string input_dir = vm["regression-gan"].as<string>();
         const std::vector<file> training_images = dlib::get_files_in_directory_tree(input_dir, dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
         if (training_images.size() == 0) {
-            std::cout << "Didn't find images for the training dataset" << endl;
+            cout << "Didn't find images for the training dataset" << endl;
             return EXIT_FAILURE;
         }
         current_state state;
@@ -530,7 +539,7 @@ int main(int argc, char** argv) try {
         std::vector<adam> d_solvers(net_d.num_computational_layers, adam(weight_decay, momentum_1, momentum_2));
         double learning_rate = 2e-4;
 
-        // Resume training from last sync file (only for the generator)
+        // Resume training from last model file (only for the generator)
         if (file_exists(model_name)) deserialize(model_name) >> net_hr;
         if (import_backbone && file_exists("backbone_colorify.dnn")) {
             cout << "Loading backbone... ";
@@ -541,14 +550,14 @@ int main(int argc, char** argv) try {
         }
 
         // Total images in the dataset
-        std::cout << "images in dataset: " << training_images.size() << endl;
+        cout << "images in dataset: " << training_images.size() << endl;
 
         // Show networks
         training_sample sample;
         matrix<rgb_pixel> input_image;
         const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
         load_image(input_image, image_info.full_name());
-        randomly_crop_image(input_image, sample, rnd, false);
+        randomly_crop_image(input_image, sample, rnd, false, do_augmentation);
         net_hr(sample.input_image);
         net_d(sample.hr_output_image);
         cout << "generator (" << count_parameters(net_hr) << " parameters)" << endl;
@@ -558,7 +567,7 @@ int main(int argc, char** argv) try {
 
         // Use some threads to preload images
         dlib::pipe<training_sample> data(minibatch_size);
-        auto f = [&data, &training_images](time_t seed) {
+        auto f = [&data, &training_images, &do_augmentation](time_t seed) {
             dlib::rand rnd(time(nullptr) + seed);
             matrix<rgb_pixel> input_image;
             training_sample temp;
@@ -566,7 +575,7 @@ int main(int argc, char** argv) try {
                 const auto& image_info = training_images[rnd.get_random_32bit_number() % training_images.size()];
                 try {
                     load_image(input_image, image_info.full_name());
-                    randomly_crop_image(input_image, temp, rnd, false);
+                    randomly_crop_image(input_image, temp, rnd, false, do_augmentation);
                     data.enqueue(temp);
                 } catch (...) {
                     cerr << "Error during image loading: " << image_info.full_name() << endl;
@@ -575,9 +584,9 @@ int main(int argc, char** argv) try {
         };
         std::thread data_loader1([f]() { f(1); });
         std::thread data_loader2([f]() { f(2); });
-        std::cout << "Waiting for the initial pipe loading... ";
+        cout << "Waiting for the initial pipe loading... ";
         while (data.size() < minibatch_size) std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "done" << std::endl;
+        cout << "done" << endl;
 
         const std::vector<float> real_labels(minibatch_size, 1), gen_labels(minibatch_size, -1);
         resizable_tensor real_samples_tensor, gen_samples_tensor, grays_tensor;
@@ -663,8 +672,8 @@ int main(int argc, char** argv) try {
                 win.set_title("COLORIFY - GAN-learning process, step#: " + to_string(iteration) + " - " + to_string(max_iter) + " samples - Original | Grayscale | Colorized");
             }
             if (iteration % 100 == 0) { // Standard progress
-                std::cout << "step#: " << iteration << "\tdiscriminator loss: " << d_loss.mean() * 2 <<
-                    "\tgenerator loss: " << g_loss.mean() << std::endl;
+                cout << "step#: " << iteration << "\tdiscriminator loss: " << d_loss.mean() * 2 <<
+                    "\tgenerator loss: " << g_loss.mean() << endl;
                 double d_loss_mean = d_loss.mean(), g_loss_mean = g_loss.mean();
                 d_loss.clear();
                 g_loss.clear();
@@ -701,9 +710,9 @@ int main(int argc, char** argv) try {
         } else {
             parse_directory(input_dir, images);
         }
-        std::cout << "total images to colorify: " << images.size() << endl;
+        cout << "total images to colorify: " << images.size() << endl;
         if (images.size() == 0) {
-            std::cout << "Didn't find images to colorify" << endl;
+            cout << "Didn't find images to colorify" << endl;
             return EXIT_FAILURE;
         }
 
@@ -714,13 +723,13 @@ int main(int argc, char** argv) try {
         if (use_lr_model) {
             if (file_exists(model_name)) deserialize(model_name) >> net_lr;
             else {
-                std::cout << "Didn't find the precomputed model: " << model_name << endl;
+                cout << "Didn't find the precomputed model: " << model_name << endl;
                 return EXIT_FAILURE;
             }
         } else {
             if (file_exists(model_name)) deserialize(model_name) >> net_hr;
             else {
-                std::cout << "Didn't find the precomputed model: " << model_name << endl;
+                cout << "Didn't find the precomputed model: " << model_name << endl;
                 return EXIT_FAILURE;
             }
         }
@@ -782,7 +791,7 @@ int main(int argc, char** argv) try {
                 win.set_title("COLORIFY - Original " + to_string(input_image.nc()) + "x" + to_string(input_image.nr()) + ") | Grayscale | Generated (" + to_string(rgb_image.nc()) + "x" + to_string(rgb_image.nr()) + ")");
                 win.set_image(join_rows(input_image, join_rows(display_gray_image, rgb_image)));
             }
-            std::cout << i << " - Hit enter to process the next image or 'q' to quit";
+            cout << i << " - Hit enter to process the next image or 'q' to quit";
             char c = std::cin.get();
             if (c == 'q' || c == 'Q') break;
         }
@@ -790,15 +799,15 @@ int main(int argc, char** argv) try {
         bool use_lr_model = vm.count("low-bulk-convert");
         const string input_dir = use_lr_model ? vm["low-bulk-convert"].as<string>() : vm["high-bulk-convert"].as<string>();
         if (!is_directory(input_dir)) {
-            std::cout << "<" << input_dir << "> isn't a directory" << endl;
+            cout << "<" << input_dir << "> isn't a directory" << endl;
             return EXIT_FAILURE;
         }
         const std::vector<file> images = dlib::get_files_in_directory_tree(input_dir, dlib::match_endings(".jpg .JPG .jpeg .JPEG"));
         if (images.size() == 0) {
-            std::cout << "Didn't find images for the bulk colorization process" << endl;
+            cout << "Didn't find images for the bulk colorization process" << endl;
             return EXIT_FAILURE;
         }
-        std::cout << "total images to colorify: " << images.size() << endl;
+        cout << "total images to colorify: " << images.size() << endl;
         
         // Load the mode
         const string model_name = use_lr_model ? "lowres_colorify.dnn" : "highres_colorify.dnn";
@@ -807,13 +816,13 @@ int main(int argc, char** argv) try {
         if (use_lr_model) {
             if (file_exists(model_name)) deserialize(model_name) >> net_lr;
             else {
-                std::cout << "Didn't find the precomputed model: " << model_name << endl;
+                cout << "Didn't find the precomputed model: " << model_name << endl;
                 return EXIT_FAILURE;
             }
         } else {
             if (file_exists(model_name)) deserialize(model_name) >> net_hr;
             else {
-                std::cout << "Didn't find the precomputed model: " << model_name << endl;
+                cout << "Didn't find the precomputed model: " << model_name << endl;
                 return EXIT_FAILURE;
             }
         }
@@ -821,7 +830,7 @@ int main(int argc, char** argv) try {
         matrix<gray_pixel> gray_image, temp_gray_image;
         matrix<lab_pixel> lab_image;
         size_t count = 0;
-        std::cout << "please wait, bulk conversion in progress... [" << count  << "/" << images.size() << "]\r";
+        cout << "please wait, bulk conversion in progress... [" << count  << "/" << images.size() << "]\r";
         for (auto& i : images) {
             try { load_image(input_image, i.full_name()); }
             catch (...) {
@@ -868,13 +877,11 @@ int main(int argc, char** argv) try {
             fs::path filePath(i.full_name()), stem = filePath.stem(), extension = filePath.extension();
             fs::path output_finalement = (filePath.parent_path() / stem).string() + suffix + extension.string();
             save_jpeg(rgb_image, output_finalement.string(), 95);
-            std::cout << "please wait, bulk conversion in progress... [" << ++count << "/" << images.size() << "]\r";
+            cout << "please wait, bulk conversion in progress... [" << ++count << "/" << images.size() << "]\r";
             if (g_interrupted) break;
         }
-        std::cout << "please wait, bulk conversion in progress... [" << images.size() << "/" << images.size() << "]\ndone" << endl;
+        cout << "please wait, bulk conversion in progress... [" << images.size() << "/" << images.size() << "]\ndone" << endl;
     }
-}
-catch (std::exception& e)
-{
-    std::cout << e.what() << endl;
+} catch (std::exception& e) {
+    cout << e.what() << endl;
 }
