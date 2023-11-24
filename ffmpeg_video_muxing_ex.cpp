@@ -2,7 +2,7 @@
 #include <dlib/media.h>
 #include <dlib/cmd_line_parser.h>
 #include <dlib/gui_widgets.h>
-#include "Model.h"
+#include <dlib/Model.h>
 
 using namespace std;
 using namespace dlib;
@@ -122,14 +122,14 @@ try {
         if (file_exists(model_name)) deserialize(model_name) >> net_hr;
         else {
             cout << "Didn't find the model (" << model_name << ")" << endl;
-            cout << "This model can be downloaded here: https://github.com/Cydral/Colorify/highres_colorify.bz2\n";
+            cout << "This model can be downloaded from: https://github.com/Cydral/Colorify/tree/main/models\n";
             return EXIT_FAILURE;
         }
     } else {
         if (file_exists(model_name)) deserialize(model_name) >> net_lr;
         else {
             cout << "Didn't find the model (" << model_name << ")" << endl;
-            cout << "This model can be downloaded here: https://github.com/Cydral/Colorify/lowres_colorify.bz2\n";
+            cout << "This model can be downloaded here: https://github.com/Cydral/Colorify/tree/main/models\n";
             return EXIT_FAILURE;
         }
     }
