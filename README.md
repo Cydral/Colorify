@@ -36,7 +36,9 @@ Our approach leverages a robust dataset comprising more than 900,000 images, ens
 
 <h2>Some results</h2>
 <p>The "samples (highres)" directory presents a compilation of colorization results for images commonly used to illustrate and compare colorization processes. These standard images usually serve as a benchmark, highlighting the program's capability to seamlessly infuse vibrant and realistic colors into everyday visuals.</p>
+<p align="center"><img src="https://github.com/Cydral/Colorify/blob/main/highres_colorify_results_1.jpg" alt=""></p>
 <p>Taking a leap into artistic expression, the "b&w images from Pexels/highres" directory demonstrates the program's prowess in transforming black and white photographs sourced from the renowned platform, Pexels.com. These images, chosen for their diverse compositions, showcase the program's ability to breathe life into monochromatic captures, producing results that are not only captivating but also artistically compelling. While not all outcomes from the "b&w images from Pexels/highres" directory were selected for formal presentation, they collectively deliver convincingly impressive results. The program's capacity to adapt to various photographic styles and compositions underscores its versatility and potential across a spectrum of creative endeavors.</p>
+<p align="center"><img src="https://github.com/Cydral/Colorify/blob/main/highres_colorify_results_2.jpg" alt=""></p>
 
 <h2>Disclaimer</h2>
 <p>Please note that Colorify's colorization algorithm is primarily trained on a dataset consisting of images randomly selected from web sites. While it performs well for similar types of images, it may not yield optimal results for all image types due to the inherent "dataset bias" problem, as mentioned in the document <a href="https://arxiv.org/abs/1603.08511">Colorful Image Colorization</a> paper from Richard Zhang, Phillip Isola and Alexei A. Efros.</p>
