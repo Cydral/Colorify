@@ -53,15 +53,15 @@ template <typename SUBNET> using res128 = res<128, SUBNET>;
 template <typename SUBNET> using res256 = res<256, SUBNET>;
 template <typename SUBNET> using res512 = res<512, SUBNET>;
 
-template <typename SUBNET> using level1 = dlib::repeat<2, res64, res<64, SUBNET>>;
-template <typename SUBNET> using level2 = dlib::repeat<2, res128, res_down<128, SUBNET>>;
-template <typename SUBNET> using level3 = dlib::repeat<5, res256, res_down<256, SUBNET>>;
-template <typename SUBNET> using level4 = dlib::repeat<3, res512, res_down<512, SUBNET>>;
+template <typename SUBNET> using level1 = dlib::repeat<1, res64, res<64, SUBNET>>;
+template <typename SUBNET> using level2 = dlib::repeat<1, res128, res_down<128, SUBNET>>;
+template <typename SUBNET> using level3 = dlib::repeat<3, res256, res_down<256, SUBNET>>;
+template <typename SUBNET> using level4 = dlib::repeat<2, res512, res_down<512, SUBNET>>;
 
-template <typename SUBNET> using level1t = dlib::repeat<2, res64, res_up<64, SUBNET>>;
-template <typename SUBNET> using level2t = dlib::repeat<2, res128, res_up<128, SUBNET>>;
-template <typename SUBNET> using level3t = dlib::repeat<5, res256, res_up<256, SUBNET>>;
-template <typename SUBNET> using level4t = dlib::repeat<3, res512, res_up<512, SUBNET>>;
+template <typename SUBNET> using level1t = dlib::repeat<1, res64, res_up<64, SUBNET>>;
+template <typename SUBNET> using level2t = dlib::repeat<1, res128, res_up<128, SUBNET>>;
+template <typename SUBNET> using level3t = dlib::repeat<3, res256, res_up<256, SUBNET>>;
+template <typename SUBNET> using level4t = dlib::repeat<2, res512, res_up<512, SUBNET>>;
 
 // ----------------------------------------------------------------------------------------
 template <

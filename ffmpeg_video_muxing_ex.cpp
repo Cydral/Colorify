@@ -28,6 +28,15 @@ void resize_inplace(matrix<pixel_type>& inout, long size) {
         inout = mem_img;
     }
 }
+template <typename pixel_type>
+void resize_inplace(matrix<pixel_type>& inout, long nc, long nr) {
+    if (inout.nr() != nr || inout.nc() != nc) {
+        matrix<pixel_type> mem_img;
+        mem_img.set_size(nc, nr);
+        resize_image(inout, mem_img);
+        inout = mem_img;
+    }
+}
 
 // ----------------------------------------------------------------------------------------
 const uint8_t hr_res_nb_bits = 5;
@@ -75,11 +84,12 @@ try {
     parser.add_option("help", "display this message and exit");
     parser.add_option("height", "height of encoded stream (defaults to whatever is in the video file)", 1);
     parser.add_option("width", "width of encoded stream (defaults to whatever is in the video file)", 1);
+    parser.add_option("dual-view", "side-by-side visualization of source and colorized images in the output");
     parser.add_option("video-codec", "video codec name (e.g. \"mpeg4\")", 1);
     parser.add_option("audio-codec", "audio codec name (e.g. \"aac\")", 1);
 
     parser.parse(argc, argv);
-    const char* one_time_opts[] = {"in", "out", "low-resolution", "high-resolution", "video-codec", "audio-codec", "height", "width" };
+    const char* one_time_opts[] = {"in", "out", "low-resolution", "high-resolution", "color-blurring", "color-boosting", "video-codec", "audio-codec", "height", "width" };
     parser.check_one_time_options(one_time_opts);
 
     parser.check_option_arg_range("width", 320, 7680);
@@ -102,6 +112,7 @@ try {
     const bool high_resolution_model = parser.option("low-resolution") ? false : true;
     const bool color_blurring = parser.option("color-blurring");
     const bool color_boosting = parser.option("color-boosting");
+    const bool dual_view = parser.option("dual-view");
     const string model_name = high_resolution_model ? "highres_colorify.dnn" : "lowres_colorify.dnn";
     using net_type_lr = loss_multiclass_log_per_pixel_weighted<cont<256, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
     using net_type_hr = loss_mean_squared_per_channel_and_pixel<2, cont<2, 1, 1, 1, 1, generator_backbone<input<matrix<gray_pixel>>>>>;
@@ -111,27 +122,29 @@ try {
         if (file_exists(model_name)) deserialize(model_name) >> net_hr;
         else {
             cout << "Didn't find the model (" << model_name << ")" << endl;
-            cout << "This model can be downloaded here: https://github.com/Cydral/Colorify/highres_colorify.zip\n";
+            cout << "This model can be downloaded here: https://github.com/Cydral/Colorify/highres_colorify.bz2\n";
             return EXIT_FAILURE;
         }
     } else {
         if (file_exists(model_name)) deserialize(model_name) >> net_lr;
         else {
             cout << "Didn't find the model (" << model_name << ")" << endl;
-            cout << "This model can be downloaded here: https://github.com/Cydral/Colorify/lowres_colorify.zip\n";
+            cout << "This model can be downloaded here: https://github.com/Cydral/Colorify/lowres_colorify.bz2\n";
             return EXIT_FAILURE;
         }
     }
     
     const std::string input_filepath  = parser.option("in").argument();
     const std::string output_filepath = parser.option("out").argument();
-    demuxer cap(input_filepath);
+    demuxer cap(input_filepath);    
 
     if (!cap.is_open()) {
         cout << "Failed to open " << input_filepath << endl;
         return EXIT_FAILURE;
     }
 
+    int output_width = get_option(parser, "width", cap.width());
+    int output_height = get_option(parser, "height", cap.height());
     muxer writer([&] {
         muxer::args args;
         args.filepath     = output_filepath;
@@ -139,8 +152,8 @@ try {
         args.enable_audio = cap.audio_enabled();
         if (args.enable_image) {
             args.args_image.codec_name  = get_option(parser, "video-codec", "mpeg4");
-            args.args_image.h           = get_option(parser, "height", cap.height());
-            args.args_image.w           = get_option(parser, "width",  cap.width());
+            args.args_image.h           = output_height;
+            args.args_image.w           = output_width * (dual_view ? 2 : 1);
             args.args_image.fmt         = cap.pixel_fmt();
             args.args_image.framerate   = cap.fps();
         }
@@ -158,12 +171,12 @@ try {
         return EXIT_FAILURE;
     }
     // Display some information    
-    cout << "Source Video codec: " << cap.get_video_codec_name() << " (" << cap.width() << "x" << cap.height() << ") => " << writer.get_video_codec_name() << " (" << writer.width() << "x" << writer.height() << ")" << endl;
+    cout << "Source Video codec: " << cap.get_video_codec_name() << " (" << cap.width() << "x" << cap.height() << ") => " << writer.get_video_codec_name() << " (" << output_width << "x" << output_height << ")" << endl;
     cout << "Frame rate: " << cap.fps() << " fps" << endl;
 
     frame f;
     matrix<gray_pixel> gray_image, temp_gray_image;
-    matrix<rgb_pixel> input_image, rgb_image, blur_image;
+    matrix<rgb_pixel> input_image, rgb_image, dual_rgb_image, blur_image;
     matrix<lab_pixel> lab_image;
     uint64_t processed_samples = 0;
 
@@ -174,6 +187,7 @@ try {
     while (cap.read(f, args_image) && !g_interrupted) {
         if (f.is_image()) {
             convert(f, input_image);
+            resize_inplace(input_image, output_width, output_height);
             rgb_image_to_grayscale_image(input_image, gray_image);
             // ---
             {
@@ -198,7 +212,7 @@ try {
                         lab_image(r, c).l = gray_image(r, c);
                 assign_image(rgb_image, lab_image);
                 if (color_boosting) {
-                    const float saturation_boost = 0.15f;
+                    const float saturation_boost = 0.17f;
                     matrix<hsi_pixel> hsi_image;
                     assign_image(hsi_image, rgb_image);
                     for (long r = 0; r < hsi_image.nr(); ++r) {
@@ -208,9 +222,11 @@ try {
                     }
                     assign_image(rgb_image, hsi_image);
                 }
+                if (dual_view) dual_rgb_image = join_rows(input_image, rgb_image);
             }
             // ---
-            convert(rgb_image, f);
+            if (dual_view) convert(dual_rgb_image, f);
+            else convert(rgb_image, f);
             resize_inplace(input_image, std_image_size);
             resize_inplace(rgb_image, std_image_size);
             win.set_image(join_rows(input_image, rgb_image));
