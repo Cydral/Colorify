@@ -1,7 +1,6 @@
 #ifndef DNN_MODEL_H
 #define DNN_MODEL_H
 
-// Inclusion de bibliothèques nécessaires
 #include <iostream>
 #include <string>
 
